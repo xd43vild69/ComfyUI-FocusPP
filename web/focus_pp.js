@@ -17,9 +17,9 @@ app.registerExtension({
             // Escuchar si se presiona la tecla F2
             if (e.key === "F2") {
                 if (!app.graph || !app.canvas) return;
-                
+
                 const nodes = app.graph._nodes;
-                
+
                 // Buscar el nodo que empiece con "pp"
                 let targetNode = null;
                 for (let node of nodes) {
@@ -28,16 +28,16 @@ app.registerExtension({
                         break; // Se detiene en el primero que encuentre
                     }
                 }
-                
+
                 if (targetNode) {
                     e.preventDefault();
-                    
+
                     // Centrar la cámara en el nodo encontrado
                     app.canvas.centerOnNode(targetNode);
-                    
+
                     // Buscar la caja de texto dentro del nodo (normalmente el widget "text" o "customtext")
                     const textWidget = targetNode.widgets?.find(w => w.type === "customtext" || w.name === "text" || w.type === "string");
-                    
+
                     if (textWidget && textWidget.inputEl) {
                         const originalTextarea = textWidget.inputEl;
                         const oldParent = originalTextarea.parentNode;
@@ -59,7 +59,7 @@ app.registerExtension({
                         });
                         // No cerrar al dar click fuera
                         overlay.addEventListener("click", (evt) => {
-                            evt.stopPropagation(); 
+                            evt.stopPropagation();
                         });
 
                         // Crear el contenedor principal del modal (95% de pantalla)
@@ -81,14 +81,14 @@ app.registerExtension({
                         modal.addEventListener("click", (evt) => evt.stopPropagation());
                         modal.addEventListener("keydown", (evt) => {
                             evt.stopPropagation();
-                            
+
                             if (evt.metaKey && evt.key === "Escape") {
                                 // Revertir el texto al estado original y cerrar
                                 originalTextarea.value = originalText;
                                 closeAndRestore();
                                 return;
                             }
-                            
+
                             if (evt.metaKey && evt.key === "Enter") {
                                 closeAndRestore();
                                 return;
@@ -159,17 +159,44 @@ app.registerExtension({
                         Object.assign(textareaContainer.style, {
                             flex: "1",
                             position: "relative",
-                            display: "flex"
+                            display: "block"
                         });
-                        
+
+                        // Crear el div espejo (Patrón Espejo)
+                        const mirrorDiv = document.createElement("div");
+                        Object.assign(mirrorDiv.style, {
+                            position: "absolute",
+                            top: "0",
+                            left: "0",
+                            width: "100%",
+                            height: "100%",
+                            fontSize: "28px",
+                            lineHeight: "1.5",
+                            margin: "0",
+                            padding: "20px",
+                            boxSizing: "border-box",
+                            zIndex: "9000",
+                            backgroundColor: "#111",
+                            color: "#eee",
+                            border: "1px solid #555",
+                            borderRadius: "4px",
+                            whiteSpace: "pre-wrap",
+                            wordWrap: "break-word",
+                            pointerEvents: "none",
+                            overflowY: "hidden",
+                            overflowX: "hidden",
+                            fontFamily: "monospace"
+                        });
+                        textareaContainer.appendChild(mirrorDiv);
+
                         // Mover el textarea original al modal
                         textareaContainer.appendChild(originalTextarea);
 
                         // Aplicar estilos "important" para evitar que LiteGraph lo reubique
                         // Y aplicar tamaño de letra gigante
-                        originalTextarea.style.setProperty("position", "relative", "important");
-                        originalTextarea.style.setProperty("left", "auto", "important");
-                        originalTextarea.style.setProperty("top", "auto", "important");
+                        originalTextarea.style.setProperty("position", "absolute", "important");
+                        originalTextarea.style.setProperty("left", "0", "important");
+                        originalTextarea.style.setProperty("top", "0", "important");
                         originalTextarea.style.setProperty("transform", "none", "important");
                         originalTextarea.style.setProperty("width", "100%", "important");
                         originalTextarea.style.setProperty("height", "100%", "important");
@@ -180,12 +207,51 @@ app.registerExtension({
                         originalTextarea.style.setProperty("padding", "20px", "important");
                         originalTextarea.style.setProperty("box-sizing", "border-box", "important");
                         originalTextarea.style.setProperty("z-index", "9001", "important");
-                        originalTextarea.style.setProperty("background-color", "#111", "important");
-                        originalTextarea.style.setProperty("color", "#eee", "important");
-                        originalTextarea.style.setProperty("border", "1px solid #555", "important");
+                        originalTextarea.style.setProperty("background-color", "transparent", "important");
+                        originalTextarea.style.setProperty("color", "transparent", "important");
+                        originalTextarea.style.setProperty("caret-color", "white", "important");
+                        originalTextarea.style.setProperty("border", "1px solid transparent", "important");
                         originalTextarea.style.setProperty("border-radius", "4px", "important");
+                        originalTextarea.style.setProperty("outline", "none", "important");
+                        originalTextarea.style.setProperty("resize", "none", "important");
+                        originalTextarea.style.setProperty("font-family", "monospace", "important");
+                        originalTextarea.style.setProperty("overflow-y", "auto", "important");
+                        originalTextarea.style.setProperty("overflow-x", "hidden", "important");
 
                         const originalText = originalTextarea.value;
+
+                        // Función de sincronización del Patrón Espejo
+                        const updateMirror = () => {
+                            const text = originalTextarea.value;
+                            const parts = text.split(',');
+
+                            let html = '';
+                            for (let i = 0; i < parts.length; i++) {
+                                const color = i % 2 === 0 ? '#78859C' : '#789C8F';
+                                let escapedText = parts[i]
+                                    .replace(/&/g, '&amp;')
+                                    .replace(/</g, '&lt;')
+                                    .replace(/>/g, '&gt;');
+
+                                html += `<span style="color: ${color}">${escapedText}</span>`;
+                                if (i < parts.length - 1) {
+                                    html += `<span style="color: #666">,</span>`;
+                                }
+                            }
+
+                            if (text.endsWith('\n')) {
+                                html += '<br/>';
+                            }
+                            mirrorDiv.innerHTML = html;
+                        };
+
+                        const syncScroll = () => {
+                            mirrorDiv.scrollTop = originalTextarea.scrollTop;
+                        };
+
+                        originalTextarea.addEventListener('input', updateMirror);
+                        originalTextarea.addEventListener('scroll', syncScroll);
+                        updateMirror();
 
                         // Contenedor de botones
                         const btnContainer = document.createElement("div");
@@ -197,6 +263,8 @@ app.registerExtension({
 
                         // Función de cierre y restauración
                         const closeAndRestore = () => {
+                            originalTextarea.removeEventListener('input', updateMirror);
+                            originalTextarea.removeEventListener('scroll', syncScroll);
                             originalTextarea.style.cssText = oldCssText;
                             if (oldParent) {
                                 oldParent.appendChild(originalTextarea);
@@ -209,7 +277,7 @@ app.registerExtension({
                         };
 
                         const cancelBtn = document.createElement("button");
-                        cancelBtn.innerText = "Cerrar (Descartar)";
+                        cancelBtn.innerText = "Close";
                         Object.assign(cancelBtn.style, {
                             padding: "15px 30px",
                             cursor: "pointer",
@@ -227,7 +295,7 @@ app.registerExtension({
                         };
 
                         const saveBtn = document.createElement("button");
-                        saveBtn.innerText = "Guardar y Cerrar";
+                        saveBtn.innerText = "Save";
                         Object.assign(saveBtn.style, {
                             padding: "15px 30px",
                             cursor: "pointer",
