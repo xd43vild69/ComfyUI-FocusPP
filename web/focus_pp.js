@@ -43,8 +43,11 @@ app.registerExtension({
                         const oldParent = originalTextarea.parentNode;
                         const oldCssText = originalTextarea.style.cssText;
 
+                        if (document.getElementById("focus-pp-overlay")) return; // Prevent multiple modals
+
                         // Crear el overlay del modal
                         const overlay = document.createElement("div");
+                        overlay.id = "focus-pp-overlay";
                         Object.assign(overlay.style, {
                             position: "fixed",
                             top: "0",
@@ -151,7 +154,7 @@ app.registerExtension({
                         });
 
                         const title = document.createElement("h3");
-                        title.innerText = "Editar Texto: " + targetNode.title;
+                        title.innerText = "Text-Editor: " + targetNode.title;
                         title.style.margin = "0";
                         title.style.fontSize = "24px";
 
@@ -189,40 +192,63 @@ app.registerExtension({
                         });
                         textareaContainer.appendChild(mirrorDiv);
 
-                        // Mover el textarea original al modal
-                        textareaContainer.appendChild(originalTextarea);
-
-                        // Aplicar estilos "important" para evitar que LiteGraph lo reubique
-                        // Y aplicar tamaño de letra gigante
-                        originalTextarea.style.setProperty("position", "absolute", "important");
-                        originalTextarea.style.setProperty("left", "0", "important");
-                        originalTextarea.style.setProperty("top", "0", "important");
-                        originalTextarea.style.setProperty("transform", "none", "important");
-                        originalTextarea.style.setProperty("width", "100%", "important");
-                        originalTextarea.style.setProperty("height", "100%", "important");
-                        originalTextarea.style.setProperty("flex", "1", "important");
-                        originalTextarea.style.setProperty("font-size", "28px", "important");
-                        originalTextarea.style.setProperty("line-height", "1.5", "important");
-                        originalTextarea.style.setProperty("margin", "0", "important");
-                        originalTextarea.style.setProperty("padding", "20px", "important");
-                        originalTextarea.style.setProperty("box-sizing", "border-box", "important");
-                        originalTextarea.style.setProperty("z-index", "9001", "important");
-                        originalTextarea.style.setProperty("background-color", "transparent", "important");
-                        originalTextarea.style.setProperty("color", "transparent", "important");
-                        originalTextarea.style.setProperty("caret-color", "white", "important");
-                        originalTextarea.style.setProperty("border", "1px solid transparent", "important");
-                        originalTextarea.style.setProperty("border-radius", "4px", "important");
-                        originalTextarea.style.setProperty("outline", "none", "important");
-                        originalTextarea.style.setProperty("resize", "none", "important");
-                        originalTextarea.style.setProperty("font-family", "monospace", "important");
-                        originalTextarea.style.setProperty("overflow-y", "auto", "important");
-                        originalTextarea.style.setProperty("overflow-x", "hidden", "important");
-
                         const originalText = originalTextarea.value;
+
+                        // Crear el textarea falso (Clon) para el modal
+                        const modalTextarea = document.createElement("textarea");
+                        modalTextarea.value = originalText;
+                        modalTextarea.spellcheck = false;
+                        
+                        Object.assign(modalTextarea.style, {
+                            position: "absolute",
+                            left: "0",
+                            top: "0",
+                            width: "100%",
+                            height: "100%",
+                            flex: "1",
+                            fontSize: "28px",
+                            lineHeight: "1.5",
+                            margin: "0",
+                            padding: "20px",
+                            boxSizing: "border-box",
+                            zIndex: "9001",
+                            backgroundColor: "transparent",
+                            color: "transparent",
+                            caretColor: "white",
+                            border: "1px solid transparent",
+                            borderRadius: "4px",
+                            outline: "none",
+                            resize: "none",
+                            fontFamily: "monospace",
+                            overflowY: "auto",
+                            overflowX: "hidden"
+                        });
+                        
+                        textareaContainer.appendChild(modalTextarea);
+
+                        // Contador de estadísticas
+                        const statsDiv = document.createElement("div");
+                        Object.assign(statsDiv.style, {
+                            color: "#aaa",
+                            fontSize: "16px",
+                            fontFamily: "monospace"
+                        });
 
                         // Función de sincronización del Patrón Espejo
                         const updateMirror = () => {
-                            const text = originalTextarea.value;
+                            const text = modalTextarea.value;
+                            
+                            // Sincronizar silenciosamente al original (Evita que ComfyUI crashee)
+                            originalTextarea.value = text;
+                            if (textWidget.callback) {
+                                textWidget.callback(text);
+                            }
+
+                            // Actualizar estadísticas
+                            const wordCount = text.trim() === "" ? 0 : text.trim().split(/\s+/).length;
+                            const phraseCount = text.split(',').map(p => p.trim()).filter(p => p.length > 0).length;
+                            statsDiv.innerHTML = `words: ${wordCount} , phrases: ${phraseCount}`;
+
                             const parts = text.split(',');
 
                             let html = '';
@@ -246,32 +272,34 @@ app.registerExtension({
                         };
 
                         const syncScroll = () => {
-                            mirrorDiv.scrollTop = originalTextarea.scrollTop;
+                            mirrorDiv.scrollTop = modalTextarea.scrollTop;
                         };
 
-                        originalTextarea.addEventListener('input', updateMirror);
-                        originalTextarea.addEventListener('scroll', syncScroll);
+                        modalTextarea.addEventListener('input', updateMirror);
+                        modalTextarea.addEventListener('scroll', syncScroll);
                         updateMirror();
+
+                        // Contenedor principal inferior
+                        const bottomContainer = document.createElement("div");
+                        Object.assign(bottomContainer.style, {
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            marginTop: "10px"
+                        });
 
                         // Contenedor de botones
                         const btnContainer = document.createElement("div");
                         Object.assign(btnContainer.style, {
                             display: "flex",
-                            justifyContent: "flex-end",
                             gap: "10px"
                         });
 
                         // Función de cierre y restauración
                         const closeAndRestore = () => {
-                            originalTextarea.removeEventListener('input', updateMirror);
-                            originalTextarea.removeEventListener('scroll', syncScroll);
-                            originalTextarea.style.cssText = oldCssText;
-                            if (oldParent) {
-                                oldParent.appendChild(originalTextarea);
-                            }
-                            if (textWidget.callback) {
-                                textWidget.callback(originalTextarea.value);
-                            }
+                            modalTextarea.removeEventListener('input', updateMirror);
+                            modalTextarea.removeEventListener('scroll', syncScroll);
+                            
                             app.graph.setDirtyCanvas(true, true);
                             document.body.removeChild(overlay);
                         };
@@ -313,16 +341,19 @@ app.registerExtension({
                         btnContainer.appendChild(cancelBtn);
                         btnContainer.appendChild(saveBtn);
 
+                        bottomContainer.appendChild(statsDiv);
+                        bottomContainer.appendChild(btnContainer);
+
                         modal.appendChild(title);
                         modal.appendChild(textareaContainer);
-                        modal.appendChild(btnContainer);
+                        modal.appendChild(bottomContainer);
                         overlay.appendChild(modal);
 
                         document.body.appendChild(overlay);
 
-                        originalTextarea.focus();
-                        const len = originalTextarea.value.length;
-                        originalTextarea.setSelectionRange(len, len);
+                        modalTextarea.focus();
+                        const len = modalTextarea.value.length;
+                        modalTextarea.setSelectionRange(len, len);
                     }
                 }
             }
