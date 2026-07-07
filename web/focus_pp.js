@@ -192,39 +192,58 @@ app.registerExtension({
                         });
                         textareaContainer.appendChild(mirrorDiv);
 
-                        const originalText = originalTextarea.value;
+                        // Identificar si existe un wrapper de autocomplete para no romperlo
+                        let elementToMove = originalTextarea;
+                        const originalParent = originalTextarea.parentNode;
+                        const originalNextSibling = originalTextarea.nextSibling;
+                        let movedWrapper = null;
+                        
+                        if (originalParent && originalParent.tagName && originalParent.tagName.toLowerCase() === 'div' && 
+                           (originalParent.className.includes("autocomplete") || originalParent.className.includes("pysssss"))) {
+                            elementToMove = originalParent;
+                            movedWrapper = {
+                                parent: elementToMove.parentNode,
+                                sibling: elementToMove.nextSibling,
+                                cssText: elementToMove.style.cssText
+                            };
+                        }
 
-                        // Crear el textarea falso (Clon) para el modal
-                        const modalTextarea = document.createElement("textarea");
-                        modalTextarea.value = originalText;
-                        modalTextarea.spellcheck = false;
+                        // Mover al modal (ya sea solo el textarea o el wrapper entero)
+                        textareaContainer.appendChild(elementToMove);
+
+                        // Si movimos el wrapper, tenemos que asegurar que ocupe todo el espacio
+                        if (movedWrapper) {
+                            elementToMove.style.setProperty("position", "absolute", "important");
+                            elementToMove.style.setProperty("left", "0", "important");
+                            elementToMove.style.setProperty("top", "0", "important");
+                            elementToMove.style.setProperty("width", "100%", "important");
+                            elementToMove.style.setProperty("height", "100%", "important");
+                            elementToMove.style.setProperty("z-index", "9001", "important");
+                        }
+
+                        originalTextarea.style.setProperty("position", "absolute", "important");
+                        originalTextarea.style.setProperty("left", "0", "important");
+                        originalTextarea.style.setProperty("top", "0", "important");
+                        originalTextarea.style.setProperty("width", "100%", "important");
+                        originalTextarea.style.setProperty("height", "100%", "important");
+                        originalTextarea.style.setProperty("font-size", "28px", "important");
+                        originalTextarea.style.setProperty("line-height", "1.5", "important");
+                        originalTextarea.style.setProperty("margin", "0", "important");
+                        originalTextarea.style.setProperty("padding", "20px", "important");
+                        originalTextarea.style.setProperty("box-sizing", "border-box", "important");
+                        originalTextarea.style.setProperty("z-index", "9001", "important");
+                        originalTextarea.style.setProperty("background-color", "transparent", "important");
+                        originalTextarea.style.setProperty("color", "transparent", "important");
+                        originalTextarea.style.setProperty("caret-color", "white", "important");
+                        originalTextarea.style.setProperty("border", "1px solid transparent", "important");
+                        originalTextarea.style.setProperty("border-radius", "4px", "important");
+                        originalTextarea.style.setProperty("outline", "none", "important");
+                        originalTextarea.style.setProperty("resize", "none", "important");
+                        originalTextarea.style.setProperty("font-family", "monospace", "important");
+                        originalTextarea.style.setProperty("overflow-y", "auto", "important");
+                        originalTextarea.style.setProperty("overflow-x", "hidden", "important");
                         
-                        Object.assign(modalTextarea.style, {
-                            position: "absolute",
-                            left: "0",
-                            top: "0",
-                            width: "100%",
-                            height: "100%",
-                            flex: "1",
-                            fontSize: "28px",
-                            lineHeight: "1.5",
-                            margin: "0",
-                            padding: "20px",
-                            boxSizing: "border-box",
-                            zIndex: "9001",
-                            backgroundColor: "transparent",
-                            color: "transparent",
-                            caretColor: "white",
-                            border: "1px solid transparent",
-                            borderRadius: "4px",
-                            outline: "none",
-                            resize: "none",
-                            fontFamily: "monospace",
-                            overflowY: "auto",
-                            overflowX: "hidden"
-                        });
-                        
-                        textareaContainer.appendChild(modalTextarea);
+                        const originalText = originalTextarea.value;
 
                         // Contador de estadísticas
                         const statsDiv = document.createElement("div");
@@ -236,14 +255,8 @@ app.registerExtension({
 
                         // Función de sincronización del Patrón Espejo
                         const updateMirror = () => {
-                            const text = modalTextarea.value;
+                            const text = originalTextarea.value;
                             
-                            // Sincronizar silenciosamente al original (Evita que ComfyUI crashee)
-                            originalTextarea.value = text;
-                            if (textWidget.callback) {
-                                textWidget.callback(text);
-                            }
-
                             // Actualizar estadísticas
                             const wordCount = text.trim() === "" ? 0 : text.trim().split(/\s+/).length;
                             const phraseCount = text.split(',').map(p => p.trim()).filter(p => p.length > 0).length;
@@ -272,11 +285,11 @@ app.registerExtension({
                         };
 
                         const syncScroll = () => {
-                            mirrorDiv.scrollTop = modalTextarea.scrollTop;
+                            mirrorDiv.scrollTop = originalTextarea.scrollTop;
                         };
 
-                        modalTextarea.addEventListener('input', updateMirror);
-                        modalTextarea.addEventListener('scroll', syncScroll);
+                        originalTextarea.addEventListener('input', updateMirror);
+                        originalTextarea.addEventListener('scroll', syncScroll);
                         updateMirror();
 
                         // Contenedor principal inferior
@@ -297,9 +310,26 @@ app.registerExtension({
 
                         // Función de cierre y restauración
                         const closeAndRestore = () => {
-                            modalTextarea.removeEventListener('input', updateMirror);
-                            modalTextarea.removeEventListener('scroll', syncScroll);
+                            originalTextarea.removeEventListener('input', updateMirror);
+                            originalTextarea.removeEventListener('scroll', syncScroll);
                             
+                            // Restaurar estilos y posición en el DOM
+                            originalTextarea.style.cssText = oldCssText;
+                            
+                            if (movedWrapper) {
+                                elementToMove.style.cssText = movedWrapper.cssText;
+                                if (movedWrapper.parent) {
+                                    movedWrapper.parent.insertBefore(elementToMove, movedWrapper.sibling);
+                                }
+                            } else {
+                                if (originalParent) {
+                                    originalParent.insertBefore(elementToMove, originalNextSibling);
+                                }
+                            }
+                            
+                            if (textWidget.callback) {
+                                textWidget.callback(originalTextarea.value);
+                            }
                             app.graph.setDirtyCanvas(true, true);
                             document.body.removeChild(overlay);
                         };
@@ -351,9 +381,9 @@ app.registerExtension({
 
                         document.body.appendChild(overlay);
 
-                        modalTextarea.focus();
-                        const len = modalTextarea.value.length;
-                        modalTextarea.setSelectionRange(len, len);
+                        originalTextarea.focus();
+                        const len = originalTextarea.value.length;
+                        originalTextarea.setSelectionRange(len, len);
                     }
                 }
             }
