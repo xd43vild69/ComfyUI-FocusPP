@@ -82,9 +82,14 @@ app.registerExtension({
                         modal.addEventListener("keydown", (evt) => {
                             evt.stopPropagation();
                             
-                            if (evt.key === "Escape") {
+                            if (evt.metaKey && evt.key === "Escape") {
                                 // Revertir el texto al estado original y cerrar
                                 originalTextarea.value = originalText;
+                                closeAndRestore();
+                                return;
+                            }
+                            
+                            if (evt.metaKey && evt.key === "Enter") {
                                 closeAndRestore();
                                 return;
                             }
