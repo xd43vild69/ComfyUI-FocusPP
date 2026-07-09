@@ -14,6 +14,47 @@ app.registerExtension({
         document.head.appendChild(style);
 
         window.addEventListener("keydown", (e) => {
+            // Cmd + Shift + S (o Ctrl + Shift + S) para guardar imagen del nodo "output13"
+            if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key.toLowerCase() === "s" || e.code === "KeyS")) {
+                if (!app.graph) return;
+                
+                // Ignorar si el usuario está escribiendo texto en un input
+                if (e.target.localName === "input" || e.target.localName === "textarea") return;
+
+                // BLOQUEAR SIEMPRE el comportamiento por defecto (silencia el atajo nativo)
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+
+                // Buscar de forma más segura (ignora mayúsculas y espacios extra)
+                const targetNode = app.graph._nodes.find(n => n.title && n.title.toLowerCase().trim() === "output13");
+                
+                if (targetNode && targetNode.imgs && targetNode.imgs.length > 0) {
+                    // Descargar las imágenes disponibles forzando conversión a Blob (evita que el navegador solo las abra en otra pestaña)
+                    for (let i = 0; i < targetNode.imgs.length; i++) {
+                        const img = targetNode.imgs[i];
+                        
+                        fetch(img.src)
+                            .then(response => response.blob())
+                            .then(blob => {
+                                const blobUrl = URL.createObjectURL(blob);
+                                const a = document.createElement("a");
+                                a.href = blobUrl;
+                                const filename = targetNode.imgs.length > 1 ? `output13_image_${i}.png` : `output13_image.png`;
+                                a.download = filename;
+                                document.body.appendChild(a);
+                                a.click();
+                                document.body.removeChild(a);
+                                URL.revokeObjectURL(blobUrl);
+                            })
+                            .catch(err => console.error("Error al descargar imagen:", err));
+                    }
+                } else {
+                    console.warn("ComfyUI-FocusPP: No se encontró el nodo output13 o no tiene imágenes.");
+                }
+                return;
+            }
+
             // Escuchar si se presiona la tecla F2
             if (e.key === "F2") {
                 if (!app.graph || !app.canvas) return;
@@ -84,6 +125,12 @@ app.registerExtension({
                         modal.addEventListener("click", (evt) => evt.stopPropagation());
                         modal.addEventListener("keydown", (evt) => {
                             evt.stopPropagation();
+
+                            if (evt.key === "F2") {
+                                evt.preventDefault();
+                                closeAndRestore();
+                                return;
+                            }
 
                             if (evt.metaKey && evt.key === "Escape") {
                                 // Revertir el texto al estado original y cerrar
@@ -387,6 +434,6 @@ app.registerExtension({
                     }
                 }
             }
-        });
+        }, { capture: true }); // Usamos capture: true para que nuestro atajo se ejecute ANTES que los de ComfyUI
     }
 });
