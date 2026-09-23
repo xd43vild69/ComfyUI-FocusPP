@@ -11,6 +11,8 @@ Este Custom Node ha sido modificado y extendido para incluir varios atajos de te
 
 - **`F3` (Global)**: Búsqueda y enfoque rápido. Busca en todo el flujo de trabajo un nodo que tenga exactamente el título **`pl13`**, centra la cámara en él de forma instantánea y lo selecciona visualmente.
 
+- **`F5` (Global)**: Guardar imagen con ventana **"Guardar como..."**. Busca en el flujo de trabajo el nodo preview con el título **`pi13`**, abre el diálogo del sistema para elegir ruta y nombre de archivo sin mover la cámara, y muestra una notificación visual (toast) al guardar.
+
 - **`Cmd + Shift + S` / `Ctrl + Shift + S` (Global)**: Descarga rápida de imágenes. Busca el nodo con el título **`output13`** y fuerza la descarga directa (como archivo) de todas las imágenes que estén generadas y visibles dentro de ese nodo.
 
 ---
@@ -20,3 +22,4 @@ Este Custom Node ha sido modificado y extendido para incluir varios atajos de te
 - `web/focus_pp.js`: Archivo principal. Contiene la lógica del modal de texto gigante, la intercepción de la tecla `F2` para cerrar/guardar, y el atajo global de `Cmd+Shift+S`.
 - `web/toggle_h_mode.js`: Archivo inyectado para manejar exclusivamente el interruptor del modo Selección/Mano con la tecla `h`.
 - `web/focus_pl13.js`: Archivo inyectado para manejar el enfoque de cámara rápido del nodo `pl13` mediante `F3`.
+- `web/save_pi13.js`: Archivo inyectado para guardar la imagen del nodo preview `pi13` mediante `F5` abriendo el diálogo "Guardar como..." y mostrando confirmación en pantalla.
