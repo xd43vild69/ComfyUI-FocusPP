@@ -242,7 +242,7 @@ app.registerExtension({
 
                 const btnAdd = document.createElement("button");
                 btnAdd.innerText = "➕ Add";
-                btnAdd.title = "Add LoRA (Cmd+N)";
+                btnAdd.title = "Add LoRA (Cmd + +)";
                 btnAdd.style.cssText = "cursor: pointer; padding: 2px 7px; background: rgba(74, 110, 224, 0.2); color: #93c5fd; border: 1px solid rgba(74, 110, 224, 0.45); border-radius: 4px; font-weight: 600; font-size: 10px; transition: all 0.15s;";
                 btnAdd.onmouseover = () => {
                     btnAdd.style.background = "rgba(74, 110, 224, 0.38)";
@@ -391,14 +391,331 @@ app.registerExtension({
                     return dirColorMap.get(dirKey);
                 };
 
-                const applyInputPastelStyle = (inputEl, rawName) => {
+                const loraMetaCache = new Map();
+                let hoverTimer = null;
+
+                const inferFallbackMetaFromName = (rawName) => {
+                    const lower = String(rawName || "").toLowerCase();
+                    let arch = "Estándar";
+                    let archFamily = "";
+                    if (lower.includes("krea") || lower.startsWith("k-") || lower.includes("/k-")) {
+                        arch = "Flux / Krea";
+                        archFamily = "flux";
+                    } else if (lower.includes("flux")) {
+                        arch = "Flux.1";
+                        archFamily = "flux";
+                    } else if (lower.includes("wan")) {
+                        arch = "Wan 2.1/2.2";
+                        archFamily = "wan";
+                    } else if (lower.includes("qwen")) {
+                        arch = "Qwen-Image";
+                        archFamily = "qwen";
+                    } else if (lower.includes("ltx")) {
+                        arch = "LTX-Video";
+                        archFamily = "ltx";
+                    } else if (lower.includes("sdxl") || lower.includes("xl")) {
+                        arch = "SDXL";
+                        archFamily = "sdxl";
+                    }
+                    return {
+                        found: true,
+                        arch,
+                        archFamily,
+                        rank: null,
+                        alpha: null,
+                        ratio: null,
+                        strengthHint: "",
+                        resolution: "",
+                        steps: "",
+                        triggers: ""
+                    };
+                };
+
+                const fetchLoraMeta = async (rawName) => {
+                    if (!rawName || rawName === "None") return null;
+                    if (loraMetaCache.has(rawName)) return loraMetaCache.get(rawName);
+
+                    const fallback = inferFallbackMetaFromName(rawName);
+                    for (const url of ["/focuspp/lora_info", "/academia/lora_info"]) {
+                        try {
+                            const res = await fetch(url, {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ name: rawName })
+                            });
+                            if (res.ok) {
+                                const data = await res.json();
+                                if (data.meta && typeof data.meta === "object") {
+                                    loraMetaCache.set(rawName, data.meta);
+                                    return data.meta;
+                                }
+                                if (data.info || data.triggers) {
+                                    const combined = {
+                                        ...fallback,
+                                        triggers: data.triggers || "",
+                                        rawInfo: data.info || ""
+                                    };
+                                    loraMetaCache.set(rawName, combined);
+                                    return combined;
+                                }
+                            }
+                        } catch (e) {}
+                    }
+                    loraMetaCache.set(rawName, fallback);
+                    return fallback;
+                };
+
+                const getDominantActiveArch = () => {
+                    const counts = {};
+                    const labels = {};
+                    (_this.loraState || []).forEach(l => {
+                        if (l && l.enabled !== false && l.name) {
+                            const meta = loraMetaCache.get(l.name) || inferFallbackMetaFromName(l.name);
+                            if (meta && meta.archFamily) {
+                                counts[meta.archFamily] = (counts[meta.archFamily] || 0) + 1;
+                                labels[meta.archFamily] = meta.arch;
+                            }
+                        }
+                    });
+                    let bestFam = "";
+                    let bestCount = 0;
+                    for (const [fam, cnt] of Object.entries(counts)) {
+                        if (cnt > bestCount) {
+                            bestCount = cnt;
+                            bestFam = fam;
+                        }
+                    }
+                    return { family: bestFam, label: labels[bestFam] || "", count: bestCount };
+                };
+
+                const applyInputPastelStyle = (inputEl, rawName, isRowEnabled = true) => {
                     const palette = getDirectoryPalette(rawName);
-                    if (palette) {
+                    const meta = loraMetaCache.get(rawName) || inferFallbackMetaFromName(rawName);
+                    const dominant = getDominantActiveArch();
+                    const hasMismatch =
+                        isRowEnabled &&
+                        dominant.family &&
+                        dominant.count >= 1 &&
+                        meta?.archFamily &&
+                        meta.archFamily !== dominant.family;
+
+                    if (hasMismatch) {
+                        inputEl.style.color = palette ? palette.text : "#fde68a";
+                        inputEl.style.border = "1px dashed #f59e0b";
+                        inputEl.style.borderLeft = "3px solid #f59e0b";
+                        inputEl.style.boxShadow = "0 0 6px rgba(245, 158, 11, 0.28)";
+                    } else if (palette) {
                         inputEl.style.color = palette.text;
+                        inputEl.style.border = "1px solid #555";
                         inputEl.style.borderLeft = `3px solid ${palette.border}`;
+                        inputEl.style.boxShadow = "none";
                     } else {
                         inputEl.style.color = "#ddd";
+                        inputEl.style.border = "1px solid #555";
                         inputEl.style.borderLeft = "1px solid #555";
+                        inputEl.style.boxShadow = "none";
+                    }
+                };
+
+                let hideTipTimer = null;
+
+                const copyTextToClipboard = async (text) => {
+                    if (!text) return false;
+                    try {
+                        if (navigator.clipboard && navigator.clipboard.writeText) {
+                            await navigator.clipboard.writeText(text);
+                            return true;
+                        }
+                    } catch (e) {}
+                    try {
+                        const ta = document.createElement("textarea");
+                        ta.value = text;
+                        ta.style.cssText = "position:fixed;left:-9999px;top:-9999px;opacity:0;";
+                        document.body.appendChild(ta);
+                        ta.focus();
+                        ta.select();
+                        const ok = document.execCommand("copy");
+                        document.body.removeChild(ta);
+                        return ok;
+                    } catch (e) {
+                        return false;
+                    }
+                };
+
+                const hideLoraTooltip = (immediate = true) => {
+                    if (hoverTimer) {
+                        clearTimeout(hoverTimer);
+                        hoverTimer = null;
+                    }
+                    if (hideTipTimer) {
+                        clearTimeout(hideTipTimer);
+                        hideTipTimer = null;
+                    }
+                    if (immediate) {
+                        const tip = document.getElementById("fpp-lora-tooltip");
+                        if (tip) tip.style.display = "none";
+                    } else {
+                        hideTipTimer = setTimeout(() => {
+                            const tip = document.getElementById("fpp-lora-tooltip");
+                            if (tip) tip.style.display = "none";
+                        }, 260);
+                    }
+                };
+
+                const showLoraTooltip = async (rawName, anchorEl, isRowEnabled = true) => {
+                    if (!rawName || rawName === "None" || !anchorEl) return;
+                    if (hideTipTimer) {
+                        clearTimeout(hideTipTimer);
+                        hideTipTimer = null;
+                    }
+                    const meta = await fetchLoraMeta(rawName);
+                    if (!meta) return;
+
+                    let tip = document.getElementById("fpp-lora-tooltip");
+                    if (!tip) {
+                        tip = document.createElement("div");
+                        tip.id = "fpp-lora-tooltip";
+                        Object.assign(tip.style, {
+                            position: "fixed",
+                            zIndex: "100005",
+                            backgroundColor: "rgba(18, 20, 26, 0.97)",
+                            border: "1px solid #444",
+                            borderRadius: "8px",
+                            padding: "10px 12px",
+                            color: "#e2e8f0",
+                            fontSize: "11.5px",
+                            fontFamily: "system-ui, -apple-system, sans-serif",
+                            lineHeight: "1.45",
+                            maxWidth: "320px",
+                            boxShadow: "0 10px 28px rgba(0,0,0,0.65)",
+                            pointerEvents: "auto",
+                            cursor: "pointer",
+                            userSelect: "none",
+                            backdropFilter: "blur(6px)",
+                            transition: "border-color 0.15s, transform 0.1s"
+                        });
+
+                        tip.addEventListener("mouseenter", () => {
+                            if (hideTipTimer) {
+                                clearTimeout(hideTipTimer);
+                                hideTipTimer = null;
+                            }
+                        });
+
+                        tip.addEventListener("mouseleave", () => {
+                            hideLoraTooltip(false);
+                        });
+
+                        tip.addEventListener("mousedown", async (e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const triggers = (tip.dataset.triggers || "").trim();
+                            const fallbackName = (tip.dataset.fallbackName || "").trim();
+                            const textToCopy = triggers || fallbackName;
+                            if (!textToCopy) return;
+
+                            const copied = await copyTextToClipboard(textToCopy);
+                            const statusEl = tip.querySelector(".fpp-tip-copy-status");
+                            if (statusEl && copied) {
+                                statusEl.style.background = "rgba(16, 185, 129, 0.22)";
+                                statusEl.style.borderColor = "#10b981";
+                                statusEl.style.color = "#6ee7b7";
+                                statusEl.innerHTML = triggers
+                                    ? `✅ <b>¡Trigger copiado al portapapeles!</b>`
+                                    : `✅ <b>¡Nombre copiado!</b> (sin trigger en metadata)`;
+                                tip.style.borderColor = "#10b981";
+                            }
+                        });
+
+                        document.body.appendChild(tip);
+                    }
+
+                    const cleanBaseName = formatLoraDisplayName(rawName).split(/[/\\]/).pop();
+                    tip.dataset.triggers = meta.triggers || "";
+                    tip.dataset.fallbackName = cleanBaseName;
+
+                    const dominant = getDominantActiveArch();
+                    const hasMismatch =
+                        isRowEnabled &&
+                        dominant.family &&
+                        meta.archFamily &&
+                        meta.archFamily !== dominant.family;
+
+                    const rankTxt = meta.rank
+                        ? `Rank ${meta.rank}${meta.alpha !== null && meta.alpha !== undefined ? ` · Alpha ${meta.alpha}` : ""}${meta.ratio !== null && meta.ratio !== undefined ? ` (${meta.ratio}x)` : ""}`
+                        : "No especificado en header";
+
+                    let html = `<div style="font-weight:700; color:#fff; margin-bottom:5px; border-bottom:1px solid #333; padding-bottom:4px; word-break:break-all;">${formatLoraDisplayName(rawName)}</div>`;
+
+                    if (hasMismatch) {
+                        html += `<div style="background:rgba(245, 158, 11, 0.18); border-left:3px solid #f59e0b; color:#fde68a; padding:4px 6px; border-radius:4px; margin-bottom:6px; font-weight:600;">⚠️ Arquitectura distinta: Este LoRA es <b>${meta.arch}</b> (los demás activos son <b>${dominant.label}</b>)</div>`;
+                    }
+
+                    html += `<div><span style="color:#94a3b8;">🧠 Modelo:</span> <b style="color:#7dd3fc;">${meta.arch || "Estándar"}</b></div>`;
+                    html += `<div><span style="color:#94a3b8;">🏋️ Entrenamiento:</span> <b style="color:#a7f3d0;">${rankTxt}</b></div>`;
+                    if (meta.strengthHint) {
+                        html += `<div><span style="color:#94a3b8;">💡 Comportamiento:</span> <span style="color:#fcd34d;">${meta.strengthHint}</span></div>`;
+                    }
+                    if (meta.resolution || meta.steps) {
+                        const extra = [meta.resolution ? `Res ${meta.resolution}` : "", meta.steps ? `${meta.steps} steps` : ""].filter(Boolean).join(" · ");
+                        html += `<div><span style="color:#94a3b8;">📐 Dataset:</span> ${extra}</div>`;
+                    }
+                    if (meta.triggers) {
+                        const shortTrig = meta.triggers.length > 110 ? meta.triggers.slice(0, 110) + "..." : meta.triggers;
+                        html += `<div style="margin-top:5px; padding-top:5px; border-top:1px dashed #333;"><span style="color:#94a3b8;">🏷️ Triggers:</span> <span style="color:#f9a8d4; font-weight:600;">${shortTrig}</span></div>`;
+                        html += `<div class="fpp-tip-copy-status" style="margin-top:6px; padding:3px 6px; border-radius:4px; border:1px solid rgba(249,168,212,0.3); background:rgba(249,168,212,0.08); color:#fbcfe8; font-size:10.5px; text-align:center;">📋 Clic en este tooltip para copiar Trigger Word</div>`;
+                    } else {
+                        html += `<div class="fpp-tip-copy-status" style="margin-top:6px; padding:3px 6px; border-radius:4px; border:1px solid #333; background:rgba(255,255,255,0.04); color:#94a3b8; font-size:10.5px; text-align:center;">📋 Sin triggers en metadata (clic para copiar nombre)</div>`;
+                    }
+
+                    tip.innerHTML = html;
+                    tip.style.display = "block";
+                    tip.style.borderColor = hasMismatch ? "#f59e0b" : "#444";
+
+                    const rect = anchorEl.getBoundingClientRect();
+                    const tipRect = tip.getBoundingClientRect();
+                    let left = rect.right + 10;
+                    let top = rect.top - 4;
+
+                    if (left + tipRect.width > window.innerWidth - 12) {
+                        left = Math.max(12, rect.left - tipRect.width - 10);
+                    }
+                    if (top + tipRect.height > window.innerHeight - 12) {
+                        top = Math.max(12, window.innerHeight - tipRect.height - 12);
+                    }
+                    tip.style.left = `${left}px`;
+                    tip.style.top = `${top}px`;
+                };
+
+                const prefetchConfiguredLorasMeta = async () => {
+                    const names = (_this.loraState || []).map(l => l?.name).filter(n => n && n !== "None");
+                    if (names.length === 0) return;
+                    try {
+                        const res = await fetch("/focuspp/lora_info_batch", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ names })
+                        });
+                        if (res.ok) {
+                            const mapObj = await res.json();
+                            for (const [k, v] of Object.entries(mapObj)) {
+                                loraMetaCache.set(k, v);
+                            }
+                        } else {
+                            await Promise.all(names.map(n => fetchLoraMeta(n)));
+                        }
+                    } catch (e) {
+                        await Promise.all(names.map(n => fetchLoraMeta(n)));
+                    }
+                    // Actualizar bordes de compatibilidad una vez recibida la metadata
+                    if (_this.rowsContainer) {
+                        Array.from(_this.rowsContainer.children).forEach((rowEl, i) => {
+                            const inp = rowEl.querySelector(".fpp-search-input");
+                            const st = _this.loraState[i];
+                            if (inp && st) {
+                                applyInputPastelStyle(inp, st.name || "", st.enabled !== false);
+                            }
+                        });
                     }
                 };
 
@@ -488,6 +805,7 @@ app.registerExtension({
 
 
                 this.renderUI = () => {
+                    hideLoraTooltip();
                     if (txtTriggers && txtTriggers.value !== (_this.nodeTriggers || "")) {
                         txtTriggers.value = _this.nodeTriggers || "";
                     }
@@ -523,7 +841,21 @@ app.registerExtension({
                         inputSearch.className = "fpp-search-input";
                         inputSearch.placeholder = "Type to search LoRA...";
                         inputSearch.value = formatLoraDisplayName(item.name || "");
-                        applyInputPastelStyle(inputSearch, item.name || "");
+                        applyInputPastelStyle(inputSearch, item.name || "", isEnabled);
+
+                        inputSearch.addEventListener("mouseenter", () => {
+                            if (hoverTimer) clearTimeout(hoverTimer);
+                            hoverTimer = setTimeout(() => {
+                                if (dropdownList.style.display === "none") {
+                                    showLoraTooltip(_this.loraState[idx]?.name || "", inputSearch, _this.loraState[idx]?.enabled !== false);
+                                }
+                            }, 220);
+                        });
+                        inputSearch.addEventListener("mouseleave", () => {
+                            if (dropdownList.style.display === "none") {
+                                hideLoraTooltip(false);
+                            }
+                        });
 
                         const dropdownList = document.createElement("div");
                         dropdownList.className = "fpp-search-list";
@@ -534,25 +866,50 @@ app.registerExtension({
                         const setSelectedLora = (rawLoraName) => {
                             _this.loraState[idx].name = rawLoraName;
                             inputSearch.value = formatLoraDisplayName(rawLoraName);
-                            applyInputPastelStyle(inputSearch, rawLoraName);
+                            applyInputPastelStyle(inputSearch, rawLoraName, _this.loraState[idx]?.enabled !== false);
                             syncWidget();
+                            fetchLoraMeta(rawLoraName).then(() => prefetchConfiguredLorasMeta());
                         };
 
-                        const updateActiveDropdownItem = (items, newIndex, applySelection = true) => {
+                        const scrollDropdownToElement = (el, mode = "nearest") => {
+                            if (!el || !dropdownList) return;
+                            const applyScroll = () => {
+                                if (dropdownList.style.display === "none") return;
+                                const elTop = el.offsetTop;
+                                const elBottom = elTop + el.offsetHeight;
+                                const viewTop = dropdownList.scrollTop;
+                                const viewHeight = dropdownList.clientHeight;
+                                const viewBottom = viewTop + viewHeight;
+
+                                if (mode === "start") {
+                                    // Posicionar el LoRA seleccionado como punto de partida visible arriba del dropdown
+                                    dropdownList.scrollTop = Math.max(0, elTop);
+                                } else if (elTop < viewTop) {
+                                    dropdownList.scrollTop = elTop;
+                                } else if (elBottom > viewBottom) {
+                                    dropdownList.scrollTop = elBottom - viewHeight;
+                                }
+                            };
+                            applyScroll();
+                            requestAnimationFrame(applyScroll);
+                        };
+
+                        const updateActiveDropdownItem = (items, newIndex, applySelection = true, scrollMode = "nearest") => {
                             if (!items || items.length === 0) return;
                             items.forEach(el => el.classList.remove("active"));
                             activeDropdownIndex = ((newIndex % items.length) + items.length) % items.length;
                             const activeEl = items[activeDropdownIndex];
                             if (activeEl) {
                                 activeEl.classList.add("active");
-                                activeEl.scrollIntoView({ block: "nearest" });
+                                scrollDropdownToElement(activeEl, scrollMode);
                                 if (applySelection && activeEl.dataset.value) {
                                     setSelectedLora(activeEl.dataset.value);
+                                    showLoraTooltip(activeEl.dataset.value, dropdownList, _this.loraState[idx]?.enabled !== false);
                                 }
                             }
                         };
 
-                        const populateDropdown = (filterText) => {
+                        const populateDropdown = (filterText, scrollToOrigin = false) => {
                             dropdownList.innerHTML = "";
                             activeDropdownIndex = -1;
                             const lowerFilter = formatLoraDisplayName(filterText).toLowerCase();
@@ -567,9 +924,11 @@ app.registerExtension({
                                 opt.className = "fpp-search-item missing";
                                 opt.dataset.value = currentVal;
                                 renderLoraOptionContent(opt, currentVal, true);
-                                opt.addEventListener("mousedown", () => {
+                                opt.addEventListener("mousedown", (e) => {
+                                    e.preventDefault();
                                     initialAssignedValue = currentVal;
                                     dropdownList.style.display = "none";
+                                    hideLoraTooltip();
                                     setSelectedLora(currentVal);
                                 });
                                 dropdownList.appendChild(opt);
@@ -584,9 +943,18 @@ app.registerExtension({
                                     opt.dataset.value = loraName;
                                     renderLoraOptionContent(opt, loraName, false);
 
-                                    opt.addEventListener("mousedown", () => {
+                                    opt.addEventListener("mouseenter", () => {
+                                        if (hoverTimer) clearTimeout(hoverTimer);
+                                        hoverTimer = setTimeout(() => {
+                                            showLoraTooltip(loraName, dropdownList, _this.loraState[idx]?.enabled !== false);
+                                        }, 150);
+                                    });
+
+                                    opt.addEventListener("mousedown", (e) => {
+                                        e.preventDefault();
                                         initialAssignedValue = loraName;
                                         dropdownList.style.display = "none";
+                                        hideLoraTooltip();
                                         setSelectedLora(loraName);
                                     });
                                     dropdownList.appendChild(opt);
@@ -603,25 +971,39 @@ app.registerExtension({
                                 const items = Array.from(dropdownList.querySelectorAll(".fpp-search-item[data-value]"));
                                 const existingIdx = items.findIndex(el => el.dataset.value === currentVal);
                                 if (existingIdx !== -1) {
-                                    updateActiveDropdownItem(items, existingIdx, false);
+                                    updateActiveDropdownItem(items, existingIdx, false, scrollToOrigin ? "start" : "nearest");
+                                } else if (scrollToOrigin) {
+                                    dropdownList.scrollTop = 0;
                                 }
                             }
                         };
 
-                        inputSearch.addEventListener("focus", () => {
+                        const openDropdown = (filterText = "", scrollToOrigin = true) => {
                             initialAssignedValue = _this.loraState[idx]?.name || "";
-                            populateDropdown(""); 
+                            // Mostrar el contenedor ANTES de poblar y calcular scrollTop para que offsetTop sea exacto
                             dropdownList.style.display = "block";
-                            row.style.zIndex = 2000; 
+                            row.style.zIndex = 2000;
+                            populateDropdown(filterText, scrollToOrigin);
+                        };
+
+                        inputSearch.addEventListener("focus", () => {
+                            openDropdown("", true);
+                        });
+
+                        inputSearch.addEventListener("click", () => {
+                            if (dropdownList.style.display === "none") {
+                                openDropdown("", true);
+                            }
                         });
 
                         inputSearch.addEventListener("input", (e) => {
                             const typed = e.target.value;
-                            populateDropdown(typed);
                             dropdownList.style.display = "block";
+                            row.style.zIndex = 2000;
+                            populateDropdown(typed, false);
                             const matchedRaw = loraList.find(l => formatLoraDisplayName(l).toLowerCase() === typed.trim().toLowerCase());
                             _this.loraState[idx].name = matchedRaw || typed;
-                            applyInputPastelStyle(inputSearch, _this.loraState[idx].name);
+                            applyInputPastelStyle(inputSearch, _this.loraState[idx].name, _this.loraState[idx]?.enabled !== false);
                             syncWidget();
                         });
 
@@ -632,10 +1014,7 @@ app.registerExtension({
                                 e.stopImmediatePropagation();
 
                                 if (dropdownList.style.display === "none") {
-                                    initialAssignedValue = _this.loraState[idx]?.name || "";
-                                    populateDropdown("");
-                                    dropdownList.style.display = "block";
-                                    row.style.zIndex = 2000;
+                                    openDropdown("", true);
                                 }
 
                                 const items = Array.from(dropdownList.querySelectorAll(".fpp-search-item[data-value]"));
@@ -643,7 +1022,8 @@ app.registerExtension({
 
                                 let nextIdx;
                                 if (activeDropdownIndex === -1) {
-                                    const currentIdx = items.findIndex(el => el.dataset.value === (_this.loraState[idx]?.name || ""));
+                                    const currentVal = resolveCanonicalLoraName(_this.loraState[idx]?.name || "");
+                                    const currentIdx = items.findIndex(el => el.dataset.value === currentVal);
                                     if (currentIdx !== -1) {
                                         nextIdx = e.key === "ArrowDown" ? currentIdx + 1 : currentIdx - 1;
                                     } else {
@@ -653,12 +1033,13 @@ app.registerExtension({
                                     nextIdx = e.key === "ArrowDown" ? activeDropdownIndex + 1 : activeDropdownIndex - 1;
                                 }
 
-                                updateActiveDropdownItem(items, nextIdx, true);
+                                updateActiveDropdownItem(items, nextIdx, true, "nearest");
                             } else if (e.key === "Enter") {
                                 e.preventDefault();
                                 e.stopPropagation();
                                 initialAssignedValue = _this.loraState[idx]?.name || "";
                                 dropdownList.style.display = "none";
+                                hideLoraTooltip();
                                 inputSearch.blur();
                             } else if (e.key === "Escape") {
                                 e.preventDefault();
@@ -669,12 +1050,14 @@ app.registerExtension({
                                     setSelectedLora(initialAssignedValue);
                                 }
                                 dropdownList.style.display = "none";
+                                hideLoraTooltip();
                                 inputSearch.blur();
                             }
                         });
 
                         inputSearch.addEventListener("blur", () => {
                             row.style.zIndex = 1000 - idx;
+                            hideLoraTooltip();
                             setTimeout(() => { dropdownList.style.display = "none"; }, 150);
                         });
 
@@ -787,6 +1170,7 @@ app.registerExtension({
                             else row.classList.add("disabled");
                             syncWidget();
                             checkToggleAll();
+                            prefetchConfiguredLorasMeta();
                         });
                         
                         btnDelete.addEventListener("click", () => {
@@ -826,13 +1210,20 @@ app.registerExtension({
                         orderContainer.appendChild(btnDown);
 
                         // Click derecho sobre la fila para mostrar menú contextual (estilo Power Lora Loader rgthree)
-                        row.addEventListener("contextmenu", (e) => {
+                        row.addEventListener("contextmenu", async (e) => {
                             e.preventDefault();
                             e.stopPropagation();
+                            hideLoraTooltip();
                             if (window.LiteGraph && window.LiteGraph.ContextMenu) {
+                                const meta = item.name ? await fetchLoraMeta(item.name) : null;
                                 const canMoveUp = idx > 0;
                                 const canMoveDown = idx < _this.loraState.length - 1;
-                                new LiteGraph.ContextMenu([
+                                const shortTitle = item.name ? formatLoraDisplayName(item.name).split(/[/\\]/).pop() : "LoRA Options";
+                                const metaBadge = meta
+                                    ? ` (${meta.arch || "LoRA"}${meta.rank ? ` · r${meta.rank}` : ""}${meta.alpha !== null && meta.alpha !== undefined ? `/a${meta.alpha}` : ""})`
+                                    : "";
+
+                                const menuItems = [
                                     {
                                         content: "⬆️ Move Up",
                                         disabled: !canMoveUp,
@@ -842,7 +1233,23 @@ app.registerExtension({
                                         content: "⬇️ Move Down",
                                         disabled: !canMoveDown,
                                         callback: () => moveLora(idx, idx + 1)
-                                    },
+                                    }
+                                ];
+
+                                if (meta && meta.triggers) {
+                                    menuItems.push(null);
+                                    menuItems.push({
+                                        content: `🏷️ Añadir Triggers al nodo (${meta.triggers.slice(0, 32)}${meta.triggers.length > 32 ? "..." : ""})`,
+                                        callback: () => {
+                                            const cur = (_this.nodeTriggers || "").trim();
+                                            _this.nodeTriggers = cur ? `${cur}, ${meta.triggers}` : meta.triggers;
+                                            if (txtTriggers) txtTriggers.value = _this.nodeTriggers;
+                                            syncWidget();
+                                        }
+                                    });
+                                }
+
+                                menuItems.push(
                                     null,
                                     {
                                         content: isEnabled ? "⚫ Desactivar" : "🟢 Activar",
@@ -860,9 +1267,11 @@ app.registerExtension({
                                             _this.renderUI();
                                         }
                                     }
-                                ], {
+                                );
+
+                                new LiteGraph.ContextMenu(menuItems, {
                                     event: e,
-                                    title: item.name ? item.name.split(/[/\\]/).pop() : "LoRA Options"
+                                    title: `${shortTitle}${metaBadge}`
                                 });
                             }
                         });
@@ -878,10 +1287,14 @@ app.registerExtension({
 
                     checkToggleAll();
                     forceResize(true);
+                    prefetchConfiguredLorasMeta();
                 }; 
 
                 const addNewLora = (focusNewInput = false) => {
-                    const defaultName = loraList.length > 0 ? loraList[0] : "";
+                    const lastAssigned = _this.loraState.length > 0 ? _this.loraState[_this.loraState.length - 1]?.name : "";
+                    const defaultName = (lastAssigned && lastAssigned !== "None")
+                        ? lastAssigned
+                        : (loraList.length > 0 ? loraList[0] : "");
                     _this.loraState.push({ enabled: true, name: defaultName, strength: 1.0 });
                     syncWidget();
                     _this.renderUI();
@@ -943,8 +1356,13 @@ app.registerExtension({
                         container.contains(document.activeElement);
                     if (!isSelected) return;
 
-                    // Cmd + N (o Ctrl + N) sin Shift: Agregar un nuevo LoRA bloqueando nueva ventana del navegador
-                    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key.toLowerCase() === "n" || e.code === "KeyN")) {
+                    // Cmd + + (o Cmd + = / NumpadAdd): Agregar un nuevo LoRA y enfocar su input
+                    const isPlusKey =
+                        e.key === "+" ||
+                        e.key === "=" ||
+                        e.code === "Equal" ||
+                        e.code === "NumpadAdd";
+                    if ((e.metaKey || e.ctrlKey) && !e.altKey && isPlusKey) {
                         e.preventDefault();
                         e.stopPropagation();
                         e.stopImmediatePropagation();
