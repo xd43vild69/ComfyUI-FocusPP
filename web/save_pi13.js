@@ -117,8 +117,8 @@ app.registerExtension({
             // Ignorar si el usuario está escribiendo texto en un input/textarea
             if (e.target.localName === "input" || e.target.localName === "textarea") return;
 
-            // Tecla F5 (sin modificadores como Cmd/Ctrl+F5)
-            if (e.key === "F5" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+            // Tecla F1 (sin modificadores)
+            if ((e.key === "F1" || e.code === "F1") && !e.metaKey && !e.ctrlKey && !e.altKey) {
                 e.preventDefault();
                 e.stopPropagation();
                 e.stopImmediatePropagation();
@@ -132,13 +132,13 @@ app.registerExtension({
 
                 if (!targetNode) {
                     showFocusToast("⚠️ No se encontró ningún nodo con el título 'pi13'", "warning");
-                    console.warn("ComfyUI-FocusPP (F5): No se encontró el nodo 'pi13'.");
+                    console.warn("ComfyUI-FocusPP (F1): No se encontró el nodo 'pi13'.");
                     return;
                 }
 
                 if (!targetNode.imgs || targetNode.imgs.length === 0) {
                     showFocusToast("⚠️ El nodo 'pi13' no tiene ninguna imagen para guardar", "warning");
-                    console.warn("ComfyUI-FocusPP (F5): El nodo 'pi13' no tiene imágenes generadas.");
+                    console.warn("ComfyUI-FocusPP (F1): El nodo 'pi13' no tiene imágenes generadas.");
                     return;
                 }
 
@@ -162,7 +162,7 @@ app.registerExtension({
                     if (err && (err.name === "AbortError" || err.message?.includes("aborted"))) {
                         return;
                     }
-                    console.error("ComfyUI-FocusPP (F5) Error al guardar imagen de pi13:", err);
+                    console.error("ComfyUI-FocusPP (F1) Error al guardar imagen de pi13:", err);
                     showFocusToast("❌ Error al guardar la imagen de 'pi13'", "error");
                 }
             }
