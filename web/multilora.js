@@ -381,6 +381,11 @@ app.registerExtension({
                     };
                 };
 
+                const formatLoraShortName = (rawName) => {
+                    if (!rawName || rawName === "None") return "";
+                    return splitLoraPath(rawName).base;
+                };
+
                 const getDirectoryPalette = (rawName) => {
                     const { dirKey } = splitLoraPath(rawName);
                     if (!dirKey) return null;
@@ -840,7 +845,7 @@ app.registerExtension({
                         inputSearch.type = "text";
                         inputSearch.className = "fpp-search-input";
                         inputSearch.placeholder = "Type to search LoRA...";
-                        inputSearch.value = formatLoraDisplayName(item.name || "");
+                        inputSearch.value = formatLoraShortName(item.name || "");
                         applyInputPastelStyle(inputSearch, item.name || "", isEnabled);
 
                         inputSearch.addEventListener("mouseenter", () => {
@@ -865,7 +870,7 @@ app.registerExtension({
 
                         const setSelectedLora = (rawLoraName) => {
                             _this.loraState[idx].name = rawLoraName;
-                            inputSearch.value = formatLoraDisplayName(rawLoraName);
+                            inputSearch.value = formatLoraShortName(rawLoraName);
                             applyInputPastelStyle(inputSearch, rawLoraName, _this.loraState[idx]?.enabled !== false);
                             syncWidget();
                             fetchLoraMeta(rawLoraName).then(() => prefetchConfiguredLorasMeta());
@@ -1001,10 +1006,15 @@ app.registerExtension({
                             dropdownList.style.display = "block";
                             row.style.zIndex = 2000;
                             populateDropdown(typed, false);
-                            const matchedRaw = loraList.find(l => formatLoraDisplayName(l).toLowerCase() === typed.trim().toLowerCase());
-                            _this.loraState[idx].name = matchedRaw || typed;
-                            applyInputPastelStyle(inputSearch, _this.loraState[idx].name, _this.loraState[idx]?.enabled !== false);
-                            syncWidget();
+                            const lowerTyped = typed.trim().toLowerCase();
+                            const matchedRaw = loraList.find(
+                                l => formatLoraDisplayName(l).toLowerCase() === lowerTyped || formatLoraShortName(l).toLowerCase() === lowerTyped
+                            );
+                            if (matchedRaw) {
+                                _this.loraState[idx].name = matchedRaw;
+                                applyInputPastelStyle(inputSearch, matchedRaw, _this.loraState[idx]?.enabled !== false);
+                                syncWidget();
+                            }
                         });
 
                         inputSearch.addEventListener("keydown", (e) => {
@@ -1037,7 +1047,14 @@ app.registerExtension({
                             } else if (e.key === "Enter") {
                                 e.preventDefault();
                                 e.stopPropagation();
+                                const items = Array.from(dropdownList.querySelectorAll(".fpp-search-item[data-value]"));
+                                if (activeDropdownIndex >= 0 && items[activeDropdownIndex]?.dataset?.value) {
+                                    setSelectedLora(items[activeDropdownIndex].dataset.value);
+                                } else if (items.length > 0 && items[0]?.dataset?.value) {
+                                    setSelectedLora(items[0].dataset.value);
+                                }
                                 initialAssignedValue = _this.loraState[idx]?.name || "";
+                                inputSearch.value = formatLoraShortName(initialAssignedValue);
                                 dropdownList.style.display = "none";
                                 hideLoraTooltip();
                                 inputSearch.blur();
@@ -1058,6 +1075,7 @@ app.registerExtension({
                         inputSearch.addEventListener("blur", () => {
                             row.style.zIndex = 1000 - idx;
                             hideLoraTooltip();
+                            inputSearch.value = formatLoraShortName(_this.loraState[idx]?.name || "");
                             setTimeout(() => { dropdownList.style.display = "none"; }, 150);
                         });
 
