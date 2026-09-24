@@ -231,4 +231,48 @@ async def save_autocomplete_data(request):
         return web.json_response({"error": str(e)}, status=500)
 
 
+import re
+
+
+def _strip_prompt_comments(text):
+    if not isinstance(text, str) or ("//" not in text and "/*" not in text):
+        return text
+
+    # 1. Eliminar bloques /* ... */
+    cleaned = re.sub(r"/\*[\s\S]*?\*/", "", text)
+
+    # 2. Eliminar líneas o finales de línea con // (evitando http:// o https://)
+    out_lines = []
+    for line in cleaned.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("//"):
+            continue
+        line_no_cmt = re.sub(r"(^|\s)//.*$", "", line)
+        out_lines.append(line_no_cmt)
+
+    result = "\n".join(out_lines)
+    # 3. Limpiar comas dobles residuales (ej. "woman, /* red lips, */ smokey eyes" -> "woman, smokey eyes")
+    result = re.sub(r",\s*,+", ",", result)
+    result = re.sub(r"^\s*,\s*", "", result)
+    return result.strip()
+
+
+def _on_prompt_strip_comments(json_data):
+    try:
+        prompt_graph = json_data.get("prompt")
+        if isinstance(prompt_graph, dict):
+            for _node_id, node_data in prompt_graph.items():
+                inputs = node_data.get("inputs") if isinstance(node_data, dict) else None
+                if isinstance(inputs, dict):
+                    for key, val in list(inputs.items()):
+                        if isinstance(val, str) and ("//" in val or "/*" in val):
+                            inputs[key] = _strip_prompt_comments(val)
+    except Exception as e:
+        print(f"[FocusPP] Warning stripping prompt comments: {e}")
+    return json_data
+
+
+PromptServer.instance.add_on_prompt_handler(_on_prompt_strip_comments)
+
+
 __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS', 'WEB_DIRECTORY']

@@ -13,7 +13,195 @@ app.registerExtension({
         `;
         document.head.appendChild(style);
 
+        // Elimina comentarios // y /* ... */ antes de enviar el prompt a procesar
+        const stripPromptComments = (text) => {
+            if (!text || (typeof text === "string" && !text.includes("//") && !text.includes("/*"))) {
+                return text;
+            }
+            let cleaned = String(text).replace(/\/\*[\s\S]*?\*\//g, "");
+            const outLines = [];
+            for (const line of cleaned.split(/\r?\n/)) {
+                const trimmed = line.trim();
+                if (trimmed.startsWith("//")) continue;
+                const noInlineComment = line.replace(/(^|\s)\/\/.*$/, "");
+                outLines.push(noInlineComment);
+            }
+            return outLines
+                .join("\n")
+                .replace(/,\s*,+/g, ",")
+                .replace(/^\s*,\s*/, "")
+                .trim();
+        };
+
+        // Función Clear Format (Cmd + Shift + L):
+        // Convierte puntos '.' en ',', separa cada frase por ',' en su propia línea terminada en ',',
+        // respeta las separaciones de párrafos (líneas en blanco) y preserva comentarios // y /* ... */.
+        const clearFormatPromptText = (rawText) => {
+            if (!rawText) return "";
+            const savedComments = [];
+            const protectedText = String(rawText)
+                .replace(/\r\n/g, "\n")
+                .replace(/\/\*[\s\S]*?\*\//g, (match) => {
+                    const id = savedComments.length;
+                    savedComments.push(match.trim());
+                    return ` __FPP_CMT_${id}__ `;
+                })
+                .replace(/^[ \t]*\/\/[^\n]*/gm, (match) => {
+                    const id = savedComments.length;
+                    let cleanCmt = match.trim();
+                    if (!cleanCmt.endsWith(",")) cleanCmt += ",";
+                    savedComments.push(cleanCmt);
+                    return `__FPP_CMT_${id}__,`;
+                });
+
+            const paragraphs = protectedText.split(/\n\s*\n+/);
+
+            const formattedParagraphs = paragraphs
+                .map((para) => {
+                    const joined = para
+                        .replace(/\n+/g, " ")
+                        .replace(/(?<!\d)\.(?!\d)/g, ",");
+
+                    const phrases = joined
+                        .split(",")
+                        .map((seg) => seg.replace(/\s+/g, " ").replace(/,+$/, "").trim())
+                        .filter((seg) => seg.length > 0);
+
+                    if (phrases.length === 0) return "";
+                    return phrases
+                        .map((p) => {
+                            let restored = p.replace(/__FPP_CMT_(\d+)__/g, (_, idx) => savedComments[Number(idx)] || "");
+                            restored = restored.replace(/,+$/, "").trim();
+                            return `${restored},`;
+                        })
+                        .join("\n");
+                })
+                .filter((p) => p.length > 0);
+
+            return formattedParagraphs.join("\n\n");
+        };
+
+        const applyTextareaFormatWithUndo = (textarea, formatted) => {
+            if (!textarea || textarea.value === formatted) return;
+            const prevScroll = textarea.scrollTop;
+            textarea.focus();
+            textarea.setSelectionRange(0, textarea.value.length);
+            let inserted = false;
+            try {
+                inserted = document.execCommand("insertText", false, formatted);
+            } catch (err) {
+                inserted = false;
+            }
+            if (!inserted || textarea.value !== formatted) {
+                textarea.value = formatted;
+                textarea.dispatchEvent(new Event("input", { bubbles: true }));
+            }
+            textarea.scrollTop = prevScroll;
+        };
+
+        // Toggle de comentario con Cmd + / (soporta // en líneas completas y /* ... */ en selección parcial)
+        const toggleCommentOnTextarea = (textarea) => {
+            if (!textarea) return;
+            const val = textarea.value || "";
+            const selStart = textarea.selectionStart ?? 0;
+            const selEnd = textarea.selectionEnd ?? 0;
+
+            const lineStart = val.lastIndexOf("\n", Math.max(0, selStart - 1)) + 1;
+            let lineEnd = val.indexOf("\n", selEnd);
+            if (lineEnd === -1) lineEnd = val.length;
+
+            const isSingleLinePartialSelection =
+                selStart !== selEnd &&
+                !val.slice(selStart, selEnd).includes("\n") &&
+                (selStart > lineStart || selEnd < lineEnd);
+
+            if (isSingleLinePartialSelection) {
+                const selected = val.slice(selStart, selEnd);
+                const trimmedSel = selected.trim();
+                let replacement;
+                let newStart = selStart;
+                let newEnd = selEnd;
+
+                // Si la selección ya está envuelta en /* ... */ (dentro o justo alrededor)
+                const beforeTwo = val.slice(Math.max(0, selStart - 3), selStart);
+                const afterTwo = val.slice(selEnd, Math.min(val.length, selEnd + 3));
+                if (trimmedSel.startsWith("/*") && trimmedSel.endsWith("*/")) {
+                    replacement = selected.replace(/^\s*\/\*\s?/, "").replace(/\s?\*\/\s*$/, "");
+                    newEnd = newStart + replacement.length;
+                } else if (beforeTwo.includes("/*") && afterTwo.includes("*/")) {
+                    const expandStart = val.lastIndexOf("/*", selStart);
+                    const expandEnd = val.indexOf("*/", selEnd) + 2;
+                    const inner = val.slice(expandStart + 2, expandEnd - 2).trim();
+                    const updated = val.slice(0, expandStart) + inner + val.slice(expandEnd);
+                    applyTextareaFormatWithUndo(textarea, updated);
+                    textarea.setSelectionRange(expandStart, expandStart + inner.length);
+                    return;
+                } else {
+                    replacement = `/* ${selected} */`;
+                    newEnd = newStart + replacement.length;
+                }
+
+                const updated = val.slice(0, selStart) + replacement + val.slice(selEnd);
+                applyTextareaFormatWithUndo(textarea, updated);
+                textarea.setSelectionRange(newStart, newEnd);
+                return;
+            }
+
+            // Comentario de línea(s) con //
+            const blockText = val.slice(lineStart, lineEnd);
+            const blockLines = blockText.split("\n");
+            const nonEmptyLines = blockLines.filter((l) => l.trim().length > 0);
+            const allCommented = nonEmptyLines.length > 0 && nonEmptyLines.every((l) => l.trim().startsWith("//"));
+
+            const toggledLines = blockLines.map((l) => {
+                if (!l.trim()) return l;
+                if (allCommented) {
+                    return l.replace(/^(\s*)\/\/\s?/, "$1");
+                } else {
+                    return l.replace(/^(\s*)/, "$1// ");
+                }
+            });
+
+            const newBlock = toggledLines.join("\n");
+            const updated = val.slice(0, lineStart) + newBlock + val.slice(lineEnd);
+            applyTextareaFormatWithUndo(textarea, updated);
+            textarea.setSelectionRange(lineStart, lineStart + newBlock.length);
+        };
+
         window.addEventListener("keydown", (e) => {
+            // Cmd + / (o Ctrl + /): Silenciar / activar frase o línea con comentario en cualquier textarea de prompt
+            if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === "/" || e.code === "Slash")) {
+                if (e.target && e.target.tagName === "TEXTAREA") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.stopImmediatePropagation();
+                    toggleCommentOnTextarea(e.target);
+                    return;
+                }
+            }
+
+            // Cmd + Shift + L (o Ctrl + Shift + L): Clear Format en cualquier textarea activo o en el nodo pp13
+            if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key.toLowerCase() === "l" || e.code === "KeyL")) {
+                let targetTextarea = null;
+                if (e.target && e.target.tagName === "TEXTAREA") {
+                    targetTextarea = e.target;
+                } else if (app.graph && app.graph._nodes) {
+                    const ppNode = app.graph._nodes.find(n => n.title && n.title.toLowerCase().trim().startsWith("pp"));
+                    const textWidget = ppNode?.widgets?.find(w => w.type === "customtext" || w.name === "text" || w.type === "string");
+                    targetTextarea = textWidget?.inputEl || textWidget?.element || null;
+                }
+                if (targetTextarea) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.stopImmediatePropagation();
+                    const acPopup = document.getElementById("autocomplete-plus-root");
+                    if (acPopup) acPopup.style.display = "none";
+                    const formatted = clearFormatPromptText(targetTextarea.value);
+                    applyTextareaFormatWithUndo(targetTextarea, formatted);
+                    return;
+                }
+            }
+
             // Cmd + Shift + S (o Ctrl + Shift + S) para guardar imagen del nodo "output13"
             if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key.toLowerCase() === "s" || e.code === "KeyS")) {
                 if (!app.graph) return;
@@ -122,6 +310,69 @@ app.registerExtension({
                             color: "#fff",
                             fontFamily: "sans-serif"
                         });
+                        // Estado de ancla/foco para selección bidireccional fluida con Cmd + Shift + ArrowUp / ArrowDown
+                        let selAnchor = null;
+                        let selFocus = null;
+
+                        const syncSelectionEndpoints = () => {
+                            const s = originalTextarea.selectionStart ?? 0;
+                            const e = originalTextarea.selectionEnd ?? 0;
+                            const dir = originalTextarea.selectionDirection;
+                            if (s === e) {
+                                selAnchor = s;
+                                selFocus = e;
+                            } else if (
+                                selAnchor !== null &&
+                                selFocus !== null &&
+                                Math.min(selAnchor, selFocus) === s &&
+                                Math.max(selAnchor, selFocus) === e
+                            ) {
+                                // Conservar selAnchor y selFocus actuales
+                            } else if (dir === "backward") {
+                                selAnchor = e;
+                                selFocus = s;
+                            } else {
+                                selAnchor = s;
+                                selFocus = e;
+                            }
+                        };
+
+                        const getSelectionStepBoundaries = (text) => {
+                            const bounds = new Set([0, text.length]);
+                            // 1. Límites naturales de párrafo / línea (\n)
+                            for (let i = 0; i < text.length; i++) {
+                                if (text[i] === "\n") {
+                                    bounds.add(i);
+                                    if (i + 1 <= text.length) bounds.add(i + 1);
+                                }
+                            }
+                            // 2. Si hay párrafos largos sin saltos de línea (> 85 chars), añadir sub-bloques por frases/comas (~75 chars)
+                            const sortedLines = Array.from(bounds).sort((a, b) => a - b);
+                            for (let k = 0; k < sortedLines.length - 1; k++) {
+                                const segStart = sortedLines[k];
+                                const segEnd = sortedLines[k + 1];
+                                if (segEnd - segStart > 85) {
+                                    let lastMark = segStart;
+                                    for (let pos = segStart + 45; pos < segEnd - 25; pos++) {
+                                        if ((text[pos] === "," || text[pos] === ".") && pos - lastMark >= 55) {
+                                            const mark = pos + 1 < segEnd && text[pos + 1] === " " ? pos + 2 : pos + 1;
+                                            bounds.add(mark);
+                                            lastMark = mark;
+                                        } else if (pos - lastMark >= 85 && text[pos] === " ") {
+                                            bounds.add(pos + 1);
+                                            lastMark = pos + 1;
+                                        }
+                                    }
+                                }
+                            }
+                            return Array.from(bounds).sort((a, b) => a - b);
+                        };
+
+                        originalTextarea.addEventListener("mousedown", () => {
+                            selAnchor = null;
+                            selFocus = null;
+                        });
+
                         modal.addEventListener("click", (evt) => evt.stopPropagation());
                         modal.addEventListener("keydown", (evt) => {
                             evt.stopPropagation();
@@ -143,62 +394,120 @@ app.registerExtension({
                                 closeAndRestore();
                                 return;
                             }
-                            // Navegación de tags con Shift + Alt + Flechas (DESHABILITADO TEMPORALMENTE)
-                            /*
-                            if (evt.shiftKey && evt.altKey && (evt.key === "ArrowRight" || evt.key === "ArrowLeft")) {
-                                evt.preventDefault(); // Evitar comportamiento normal de las flechas
-                                
-                                const text = originalTextarea.value;
-                                const cursorPos = originalTextarea.selectionStart;
-                                
-                                let parts = text.split(/([,\n]+)/);
-                                let currentLength = 0;
-                                let partIndex = -1;
-                                
-                                // Encontrar en qué bloque está el cursor (los bloques de texto están en índices pares 0, 2, 4...)
-                                for (let i = 0; i < parts.length; i += 2) {
-                                    let partStart = currentLength;
-                                    let partEnd = currentLength + parts[i].length;
-                                    let delimLength = (i + 1 < parts.length) ? parts[i+1].length : 0;
-                                    
-                                    // Comprobar si el cursor está dentro del tag o su delimitador
-                                    if (cursorPos >= partStart && cursorPos <= partEnd + delimLength) {
-                                        partIndex = i;
+
+                            // Cmd + / dentro del modal Text-Editor: Silenciar / Des-silenciar línea o selección
+                            if ((evt.metaKey || evt.ctrlKey) && !evt.shiftKey && !evt.altKey && (evt.key === "/" || evt.code === "Slash")) {
+                                evt.preventDefault();
+                                evt.stopImmediatePropagation();
+                                const acPopup = document.getElementById("autocomplete-plus-root");
+                                if (acPopup) acPopup.style.display = "none";
+                                toggleCommentOnTextarea(originalTextarea);
+                                updateMirror();
+                                return;
+                            }
+
+                            // Cmd + Shift + L dentro del modal Text-Editor: Clear Format
+                            if ((evt.metaKey || evt.ctrlKey) && evt.shiftKey && (evt.key.toLowerCase() === "l" || evt.code === "KeyL")) {
+                                evt.preventDefault();
+                                evt.stopImmediatePropagation();
+                                const acPopup = document.getElementById("autocomplete-plus-root");
+                                if (acPopup) acPopup.style.display = "none";
+                                const formatted = clearFormatPromptText(originalTextarea.value);
+                                applyTextareaFormatWithUndo(originalTextarea, formatted);
+                                updateMirror();
+                                selAnchor = null;
+                                selFocus = null;
+                                return;
+                            }
+
+                            // Alt + ArrowUp / ArrowDown: Mover la línea/frase actual hacia arriba o abajo
+                            if (evt.altKey && !evt.metaKey && !evt.ctrlKey && !evt.shiftKey && (evt.key === "ArrowUp" || evt.key === "ArrowDown")) {
+                                evt.preventDefault();
+                                evt.stopImmediatePropagation();
+                                const val = originalTextarea.value;
+                                const lines = val.split("\n");
+                                const cursorPos = originalTextarea.selectionStart ?? 0;
+                                let charCount = 0;
+                                let lineIdx = 0;
+                                for (let i = 0; i < lines.length; i++) {
+                                    if (cursorPos <= charCount + lines[i].length) {
+                                        lineIdx = i;
                                         break;
                                     }
-                                    currentLength += parts[i].length + delimLength;
+                                    charCount += lines[i].length + 1;
                                 }
-                                
-                                if (partIndex !== -1) {
-                                    let nextIndex = evt.key === "ArrowRight" ? partIndex + 2 : partIndex - 2;
-                                    
-                                    // Respetar límites
-                                    if (nextIndex >= 0 && nextIndex < parts.length) {
-                                        // Intercambiar los bloques de texto (dejando los delimitadores de comas/saltos de línea intactos en su sitio)
-                                        let temp = parts[partIndex];
-                                        parts[partIndex] = parts[nextIndex];
-                                        parts[nextIndex] = temp;
-                                        
-                                        // Reconstruir el texto
-                                        originalTextarea.value = parts.join('');
-                                        
-                                        // Calcular nueva posición para mantener el texto seleccionado
-                                        let newStart = 0;
-                                        for(let i=0; i < nextIndex; i++) {
-                                            newStart += parts[i].length;
-                                        }
-                                        let newEnd = newStart + parts[nextIndex].length;
-                                        
-                                        originalTextarea.focus();
-                                        originalTextarea.setSelectionRange(newStart, newEnd);
-                                        
-                                        // Disparar evento de input para que ComfyUI y autocomplete registren el cambio
-                                        originalTextarea.dispatchEvent(new Event("input", { bubbles: true }));
+                                const targetIdx = evt.key === "ArrowUp" ? lineIdx - 1 : lineIdx + 1;
+                                if (targetIdx >= 0 && targetIdx < lines.length) {
+                                    const tmp = lines[lineIdx];
+                                    lines[lineIdx] = lines[targetIdx];
+                                    lines[targetIdx] = tmp;
+                                    const newText = lines.join("\n");
+                                    let newLineStart = 0;
+                                    for (let i = 0; i < targetIdx; i++) {
+                                        newLineStart += lines[i].length + 1;
                                     }
+                                    applyTextareaFormatWithUndo(originalTextarea, newText);
+                                    originalTextarea.setSelectionRange(newLineStart, newLineStart + lines[targetIdx].length);
+                                    updateMirror();
                                 }
+                                return;
                             }
-                            */
-                        });
+
+                            // Prioridad máxima a la selección de texto con flechas: ocultar popups flotantes que bloqueen ArrowUp/Down
+                            if (
+                                (evt.shiftKey || evt.metaKey || evt.altKey) &&
+                                (evt.key === "ArrowUp" || evt.key === "ArrowDown" || evt.key === "ArrowLeft" || evt.key === "ArrowRight")
+                            ) {
+                                const acPopup = document.getElementById("autocomplete-plus-root");
+                                if (acPopup) acPopup.style.display = "none";
+                                document.querySelectorAll(".pysssss-autocomplete").forEach(el => {
+                                    el.style.display = "none";
+                                });
+                            }
+
+                            // Cmd + Shift + ArrowUp / ArrowDown: Desplazamiento fluido de la selección hacia atrás y hacia adelante
+                            if ((evt.metaKey || evt.ctrlKey) && evt.shiftKey && (evt.key === "ArrowUp" || evt.key === "ArrowDown")) {
+                                evt.preventDefault();
+                                evt.stopImmediatePropagation();
+
+                                syncSelectionEndpoints();
+                                const text = originalTextarea.value || "";
+                                const boundaries = getSelectionStepBoundaries(text);
+
+                                let newFocus = selFocus;
+                                if (evt.key === "ArrowUp") {
+                                    // Buscar el límite anterior (< selFocus)
+                                    let prevBound = 0;
+                                    for (let i = boundaries.length - 1; i >= 0; i--) {
+                                        if (boundaries[i] < selFocus) {
+                                            prevBound = boundaries[i];
+                                            break;
+                                        }
+                                    }
+                                    newFocus = prevBound;
+                                } else {
+                                    // ArrowDown: Buscar el límite siguiente (> selFocus)
+                                    let nextBound = text.length;
+                                    for (let i = 0; i < boundaries.length; i++) {
+                                        if (boundaries[i] > selFocus) {
+                                            nextBound = boundaries[i];
+                                            break;
+                                        }
+                                    }
+                                    newFocus = nextBound;
+                                }
+
+                                selFocus = newFocus;
+                                const newStart = Math.min(selAnchor, selFocus);
+                                const newEnd = Math.max(selAnchor, selFocus);
+                                const newDir = selFocus < selAnchor ? "backward" : "forward";
+                                originalTextarea.setSelectionRange(newStart, newEnd, newDir);
+                                return;
+                            } else if (evt.key === "ArrowUp" || evt.key === "ArrowDown" || evt.key === "ArrowLeft" || evt.key === "ArrowRight") {
+                                // Si usa flechas normales o con Shift/Alt, actualizar endpoints en el siguiente tick
+                                setTimeout(syncSelectionEndpoints, 0);
+                            }
+                        }, { capture: true });
 
                         const title = document.createElement("h3");
                         title.innerText = "Text-Editor: " + targetNode.title;
@@ -303,25 +612,57 @@ app.registerExtension({
                         // Función de sincronización del Patrón Espejo
                         const updateMirror = () => {
                             const text = originalTextarea.value;
-                            
-                            // Actualizar estadísticas
-                            const wordCount = text.trim() === "" ? 0 : text.trim().split(/\s+/).length;
-                            const phraseCount = text.split(',').map(p => p.trim()).filter(p => p.length > 0).length;
-                            statsDiv.innerHTML = `words: ${wordCount} , phrases: ${phraseCount}`;
+                            const activeText = stripPromptComments(text);
 
-                            const parts = text.split(',');
+                            // Actualizar estadísticas reales (excluyendo lo silenciado)
+                            const wordCount = activeText.trim() === "" ? 0 : activeText.trim().split(/\s+/).length;
+                            const phraseCount = activeText.split(',').map(p => p.trim()).filter(p => p.length > 0).length;
+                            const mutedBlocks = (text.match(/\/\*[\s\S]*?\*\/|^[ \t]*\/\/.*$/gm) || []).length;
+                            statsDiv.innerHTML = mutedBlocks > 0
+                                ? `words: ${wordCount} , phrases: ${phraseCount} <span style="color:#f59e0b; margin-left:8px;">(🔇 ${mutedBlocks} silenciada${mutedBlocks > 1 ? 's' : ''} — Cmd+/)</span>`
+                                : `words: ${wordCount} , phrases: ${phraseCount} <span style="color:#64748b; margin-left:8px;">(Cmd+/ para silenciar)</span>`;
 
-                            let html = '';
+                            // Tokenizar primero bloques comentados /* ... */ y líneas // ... para pintarlos en gris tachado
+                            const commentTokens = [];
+                            const tokenized = text
+                                .replace(/\/\*[\s\S]*?\*\//g, (m) => {
+                                    const id = commentTokens.length;
+                                    commentTokens.push(m);
+                                    return `\u0000CMT_${id}\u0000`;
+                                })
+                                .replace(/^([ \t]*\/\/[^\n]*)/gm, (m) => {
+                                    const id = commentTokens.length;
+                                    commentTokens.push(m);
+                                    return `\u0000CMT_${id}\u0000`;
+                                });
+
+                            const escapeHtml = (s) =>
+                                s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+                            const parts = tokenized.split(",");
+                            let html = "";
+                            let activeColorIdx = 0;
+
                             for (let i = 0; i < parts.length; i++) {
-                                const color = i % 2 === 0 ? '#78859C' : '#789C8F';
-                                let escapedText = parts[i]
-                                    .replace(/&/g, '&amp;')
-                                    .replace(/</g, '&lt;')
-                                    .replace(/>/g, '&gt;');
+                                const seg = parts[i];
+                                const commaSuffix = i < parts.length - 1 ? "," : "";
+                                const fullSeg = seg + commaSuffix;
 
-                                html += `<span style="color: ${color}">${escapedText}</span>`;
-                                if (i < parts.length - 1) {
-                                    html += `<span style="color: #666">,</span>`;
+                                // Si el segmento entero es un comentario de línea
+                                if (/^\s*\u0000CMT_\d+\u0000\s*,?\s*$/.test(fullSeg)) {
+                                    const restored = fullSeg.replace(/\u0000CMT_(\d+)\u0000/g, (_, idx) => {
+                                        const cmt = escapeHtml(commentTokens[Number(idx)] || "");
+                                        return `<span style="color: #565f70; text-decoration: line-through; opacity: 0.68;">${cmt}</span>`;
+                                    });
+                                    html += `<span style="color: #565f70;">${restored}</span>`;
+                                } else {
+                                    const color = activeColorIdx % 2 === 0 ? "#78859C" : "#789C8F";
+                                    activeColorIdx++;
+                                    const escaped = escapeHtml(fullSeg).replace(/\u0000CMT_(\d+)\u0000/g, (_, idx) => {
+                                        const cmt = escapeHtml(commentTokens[Number(idx)] || "");
+                                        return `<span style="color: #565f70; text-decoration: line-through; opacity: 0.68;">${cmt}</span>`;
+                                    });
+                                    html += `<span style="color: ${color}">${escaped}</span>`;
                                 }
                             }
 
@@ -381,6 +722,24 @@ app.registerExtension({
                             document.body.removeChild(overlay);
                         };
 
+                        const clearFormatBtn = document.createElement("button");
+                        clearFormatBtn.innerText = "✨ Clear Format (Cmd+Shift+L)";
+                        Object.assign(clearFormatBtn.style, {
+                            padding: "15px 22px",
+                            cursor: "pointer",
+                            backgroundColor: "#7c3aed",
+                            color: "#fff",
+                            border: "none",
+                            borderRadius: "4px",
+                            fontSize: "16px",
+                            fontWeight: "bold"
+                        });
+                        clearFormatBtn.onclick = () => {
+                            const formatted = clearFormatPromptText(originalTextarea.value);
+                            applyTextareaFormatWithUndo(originalTextarea, formatted);
+                            updateMirror();
+                        };
+
                         const editAcBtn = document.createElement("button");
                         editAcBtn.innerText = "🏷️ Editar Autocomplete";
                         Object.assign(editAcBtn.style, {
@@ -431,6 +790,7 @@ app.registerExtension({
                             closeAndRestore();
                         };
 
+                        btnContainer.appendChild(clearFormatBtn);
                         btnContainer.appendChild(editAcBtn);
                         btnContainer.appendChild(cancelBtn);
                         btnContainer.appendChild(saveBtn);
@@ -991,6 +1351,16 @@ app.registerExtension({
             const ensureDomBadge = () => {
                 if (!isPPNode()) return;
                 const textWidget = node.widgets?.find(w => w.type === "customtext" || w.name === "text" || w.type === "string");
+                if (textWidget && !textWidget._fppCommentSerializeHooked) {
+                    textWidget._fppCommentSerializeHooked = true;
+                    const origSerialize = textWidget.serializeValue;
+                    textWidget.serializeValue = async function (...args) {
+                        const rawVal = origSerialize
+                            ? await origSerialize.apply(this, args)
+                            : this.value;
+                        return typeof rawVal === "string" ? stripPromptComments(rawVal) : rawVal;
+                    };
+                }
                 const inputEl = textWidget?.inputEl || textWidget?.element;
                 const parentEl = inputEl?.parentElement;
                 if (!parentEl || parentEl.querySelector(".fpp-pp13-ac-btn")) return;
