@@ -1059,5 +1059,89 @@ app.registerExtension({
                 }
             }
         }, 1000);
+
+        // --- BOTÓN PARA COLAPSAR / EXPANDIR LA BARRA DE ACCIONES SUPERIOR (DEJANDO SOLO RUN / QUEUE) ---
+        const COLLAPSE_STORAGE_KEY = "fpp_actionbar_collapsed";
+        let isActionbarCollapsed = localStorage.getItem(COLLAPSE_STORAGE_KEY) !== "false"; // Por defecto colapsada como pidió el usuario
+
+        const collapseStyle = document.createElement("style");
+        collapseStyle.id = "fpp-actionbar-collapse-style";
+        collapseStyle.innerHTML = `
+            body.fpp-actionbar-collapsed .pixaroma-align-group,
+            body.fpp-actionbar-collapsed .pixwb-group-btn,
+            body.fpp-actionbar-collapsed .pixhb-group-btn,
+            body.fpp-actionbar-collapsed .fpp-collapsible-toolbar-item {
+                display: none !important;
+            }
+            .fpp-actionbar-toggle-btn {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                width: 24px;
+                height: 28px;
+                border-radius: 6px;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                background: rgba(30, 33, 42, 0.85);
+                color: #94a3b8;
+                cursor: pointer;
+                font-size: 11px;
+                padding: 0;
+                margin-right: 2px;
+                transition: all 0.15s ease;
+                user-select: none;
+            }
+            .fpp-actionbar-toggle-btn:hover {
+                background: rgba(59, 130, 246, 0.25);
+                border-color: rgba(96, 165, 250, 0.5);
+                color: #ffffff;
+            }
+        `;
+        document.head.appendChild(collapseStyle);
+
+        const syncActionbarCollapseState = () => {
+            document.body.classList.toggle("fpp-actionbar-collapsed", isActionbarCollapsed);
+            const settingsGroupEl = app.menu?.settingsGroup?.element;
+            if (!settingsGroupEl) return;
+
+            // Marcar settingsGroup ("Show Image Feed") y todos los botones de custom nodes a su izquierda
+            settingsGroupEl.classList.add("fpp-collapsible-toolbar-item");
+            let prev = settingsGroupEl.previousElementSibling;
+            while (prev) {
+                if (!prev.classList.contains("fpp-actionbar-toggle-group")) {
+                    prev.classList.add("fpp-collapsible-toolbar-item");
+                }
+                prev = prev.previousElementSibling;
+            }
+
+            // Crear o actualizar el botón de colapsar/expandir justo después de settingsGroup (al lado de ⋮⋮ Run)
+            let toggleBtn = document.getElementById("fpp-actionbar-toggle-btn");
+            if (!toggleBtn) {
+                toggleBtn = document.createElement("button");
+                toggleBtn.id = "fpp-actionbar-toggle-btn";
+                toggleBtn.type = "button";
+                toggleBtn.className = "fpp-actionbar-toggle-btn fpp-actionbar-toggle-group";
+                toggleBtn.addEventListener("click", (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    isActionbarCollapsed = !isActionbarCollapsed;
+                    localStorage.setItem(COLLAPSE_STORAGE_KEY, String(isActionbarCollapsed));
+                    syncActionbarCollapseState();
+                });
+                settingsGroupEl.after(toggleBtn);
+            }
+
+            toggleBtn.innerHTML = isActionbarCollapsed ? "◀" : "▶";
+            toggleBtn.title = isActionbarCollapsed
+                ? "Mostrar barra de herramientas (Manager, Pixaroma, Feed...)"
+                : "Colapsar barra de herramientas (dejar solo Run)";
+        };
+
+        // Ejecutar y observar inserciones tardías de custom nodes (ej. Pixaroma / Manager / rgthree)
+        syncActionbarCollapseState();
+        const actionbarInterval = setInterval(() => {
+            syncActionbarCollapseState();
+        }, 600);
+        setTimeout(() => clearInterval(actionbarInterval), 12000);
+        setInterval(syncActionbarCollapseState, 3000);
     }
 });
