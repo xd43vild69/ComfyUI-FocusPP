@@ -335,8 +335,80 @@ app.registerExtension({
                 return;
             }
 
+            // Rastrear estado físico de Cmd/Ctrl para macOS (donde Cocoa convierte Cmd+Esc en cancelOperation: con metaKey=false)
+            if (e.key === "Meta" || e.key === "Control" || e.metaKey || e.ctrlKey) {
+                window._fppMetaHeld = true;
+                window._fppLastMetaTime = Date.now();
+            }
+
+            // Cmd + Esc, Ctrl + Esc, o Esc en cualquier parte de la ventana: cerrar inmediatamente el modal activo
+            if (e.key === "Escape" || e.code === "Escape" || e.keyCode === 27) {
+                const isCmdOrCtrlEsc =
+                    e.metaKey ||
+                    e.ctrlKey ||
+                    window._fppMetaHeld ||
+                    (window._fppLastMetaTime && Date.now() - window._fppLastMetaTime < 1500);
+
+                const acPopup = document.getElementById("autocomplete-plus-root");
+                const isAcVisible = acPopup && acPopup.style.display !== "none" && acPopup.offsetParent !== null;
+
+                // Si es Cmd+Esc cerramos el modal siempre; si es Esc solo y el autocomplete NO está visible, también cerramos el modal
+                if (isCmdOrCtrlEsc || !isAcVisible) {
+                    if (acPopup) acPopup.style.display = "none";
+
+                    const acEditorOverlay = document.getElementById("fpp-ac-editor-overlay");
+                    if (acEditorOverlay) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        e.stopImmediatePropagation();
+                        acEditorOverlay.remove();
+                        return;
+                    }
+
+                    const existingOverlay = document.getElementById("focus-pp-overlay");
+                    if (existingOverlay) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        e.stopImmediatePropagation();
+                        if (typeof existingOverlay._closeAndRestore === "function") {
+                            existingOverlay._closeAndRestore();
+                        } else {
+                            existingOverlay.remove();
+                        }
+                        return;
+                    }
+                }
+            }
+
+            // Cmd + Enter (o Ctrl + Enter) en cualquier parte del modal: guardar y cerrar el modal
+            if ((e.metaKey || e.ctrlKey) && (e.key === "Enter" || e.code === "Enter")) {
+                const existingOverlay = document.getElementById("focus-pp-overlay");
+                if (existingOverlay && typeof existingOverlay._closeAndRestore === "function") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.stopImmediatePropagation();
+                    const acPopup = document.getElementById("autocomplete-plus-root");
+                    if (acPopup) acPopup.style.display = "none";
+                    existingOverlay._closeAndRestore();
+                    return;
+                }
+            }
+
             // Escuchar si se presiona la tecla F2
             if (e.key === "F2") {
+                const existingOverlay = document.getElementById("focus-pp-overlay");
+                if (existingOverlay) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.stopImmediatePropagation();
+                    if (typeof existingOverlay._closeAndRestore === "function") {
+                        existingOverlay._closeAndRestore();
+                    } else {
+                        existingOverlay.remove();
+                    }
+                    return;
+                }
+
                 if (!app.graph || !app.canvas) return;
 
                 const nodes = app.graph._nodes;
@@ -352,6 +424,8 @@ app.registerExtension({
 
                 if (targetNode) {
                     e.preventDefault();
+                    e.stopPropagation();
+                    e.stopImmediatePropagation();
 
                     // Centrar la cámara en el nodo encontrado
                     app.canvas.centerOnNode(targetNode);
@@ -363,8 +437,6 @@ app.registerExtension({
                         const originalTextarea = textWidget.inputEl;
                         const oldParent = originalTextarea.parentNode;
                         const oldCssText = originalTextarea.style.cssText;
-
-                        if (document.getElementById("focus-pp-overlay")) return; // Prevent multiple modals
 
                         // Crear el overlay del modal
                         const overlay = document.createElement("div");
@@ -841,7 +913,14 @@ app.registerExtension({
                                 textWidget.callback(originalTextarea.value);
                             }
                             app.graph.setDirtyCanvas(true, true);
-                            document.body.removeChild(overlay);
+                            if (overlay.parentNode) {
+                                overlay.parentNode.removeChild(overlay);
+                            }
+                        };
+                        overlay._closeAndRestore = closeAndRestore;
+                        overlay._cancelAndRestore = () => {
+                            originalTextarea.value = originalText;
+                            closeAndRestore();
                         };
 
                         const clearFormatBtn = document.createElement("button");
@@ -860,6 +939,7 @@ app.registerExtension({
                             const formatted = clearFormatPromptText(originalTextarea.value);
                             applyTextareaFormatWithUndo(originalTextarea, formatted);
                             updateMirror();
+                            originalTextarea.focus();
                         };
 
                         const editAcBtn = document.createElement("button");
@@ -928,12 +1008,56 @@ app.registerExtension({
                         document.body.appendChild(overlay);
 
                         originalTextarea.focus();
-                        const len = originalTextarea.value.length;
-                        originalTextarea.setSelectionRange(len, len);
+                        originalTextarea.setSelectionRange(0, 0);
+                        originalTextarea.scrollTop = 0;
+                        mirrorDiv.scrollTop = 0;
                     }
                 }
             }
         }, { capture: true }); // Usamos capture: true para que nuestro atajo se ejecute ANTES que los de ComfyUI
+
+        // Fallback en keyup para macOS: en Mac, Cocoa convierte Cmd+Esc en cancelOperation: (metaKey=false)
+        // o emite el keyup de Escape justo al soltar Cmd.
+        window.addEventListener("keyup", (e) => {
+            if (e.key === "Meta" || e.key === "Control") {
+                window._fppMetaHeld = false;
+                window._fppLastMetaTime = Date.now();
+                return;
+            }
+            if (e.key === "Escape" || e.code === "Escape" || e.keyCode === 27) {
+                const isCmdOrCtrlEsc =
+                    e.metaKey ||
+                    e.ctrlKey ||
+                    window._fppMetaHeld ||
+                    (window._fppLastMetaTime && Date.now() - window._fppLastMetaTime < 1500);
+
+                const acPopup = document.getElementById("autocomplete-plus-root");
+                const isAcVisible = acPopup && acPopup.style.display !== "none" && acPopup.offsetParent !== null;
+
+                if (isCmdOrCtrlEsc || !isAcVisible) {
+                    if (acPopup) acPopup.style.display = "none";
+
+                    const acEditorOverlay = document.getElementById("fpp-ac-editor-overlay");
+                    if (acEditorOverlay) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        acEditorOverlay.remove();
+                        return;
+                    }
+
+                    const existingOverlay = document.getElementById("focus-pp-overlay");
+                    if (existingOverlay) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (typeof existingOverlay._closeAndRestore === "function") {
+                            existingOverlay._closeAndRestore();
+                        } else {
+                            existingOverlay.remove();
+                        }
+                    }
+                }
+            }
+        }, { capture: true });
 
         // --- RECARGA EN CALIENTE DE COMFYUI-AUTOCOMPLETE-PLUS ---
         const reloadAutocompletePlusInMemory = async () => {
