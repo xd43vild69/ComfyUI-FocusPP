@@ -168,7 +168,99 @@ app.registerExtension({
             textarea.setSelectionRange(lineStart, lineStart + newBlock.length);
         };
 
+        // Ctrl + Shift + C (o Cmd + Shift + C): Comentar / descomentar selección específicamente con /* texto aqui */
+        const toggleBlockCommentOnTextarea = (textarea) => {
+            if (!textarea) return;
+            const val = textarea.value || "";
+            const selStart = textarea.selectionStart ?? 0;
+            const selEnd = textarea.selectionEnd ?? 0;
+
+            // Helper para detectar si un rango [start, end] está dentro de un bloque /* ... */ existente
+            const findEnclosingBlockComment = (start, end) => {
+                const openIdx = val.lastIndexOf("/*", start);
+                if (openIdx === -1) return null;
+                // Verificar que no haya un */ entre openIdx y start
+                const closeBeforeStart = val.indexOf("*/", openIdx + 2);
+                if (closeBeforeStart !== -1 && closeBeforeStart < start) return null;
+
+                const closeIdx = val.indexOf("*/", Math.max(end - 2, openIdx + 2));
+                if (closeIdx === -1) return null;
+                return { openIdx, closeIdx: closeIdx + 2 };
+            };
+
+            if (selStart !== selEnd) {
+                const selected = val.slice(selStart, selEnd);
+                const trimmedSel = selected.trim();
+
+                // Caso 1: La selección misma incluye /* ... */ al principio y al final
+                if (trimmedSel.startsWith("/*") && trimmedSel.endsWith("*/") && trimmedSel.length >= 4) {
+                    const replacement = selected.replace(/^(\s*)\/\*\s?/, "$1").replace(/\s?\*\/(\s*)$/, "$1");
+                    const updated = val.slice(0, selStart) + replacement + val.slice(selEnd);
+                    applyTextareaFormatWithUndo(textarea, updated);
+                    textarea.setSelectionRange(selStart, selStart + replacement.length);
+                    return;
+                }
+
+                // Caso 2: El usuario seleccionó el texto de adentro de un /* ... */ ya existente
+                const enclosing = findEnclosingBlockComment(selStart, selEnd);
+                if (enclosing) {
+                    const inner = val.slice(enclosing.openIdx + 2, enclosing.closeIdx - 2).replace(/^\s/, "").replace(/\s$/, "");
+                    const updated = val.slice(0, enclosing.openIdx) + inner + val.slice(enclosing.closeIdx);
+                    applyTextareaFormatWithUndo(textarea, updated);
+                    textarea.setSelectionRange(enclosing.openIdx, enclosing.openIdx + inner.length);
+                    return;
+                }
+
+                // Caso 3: No está comentado -> envolver con /* ... */
+                const replacement = `/* ${selected} */`;
+                const updated = val.slice(0, selStart) + replacement + val.slice(selEnd);
+                applyTextareaFormatWithUndo(textarea, updated);
+                textarea.setSelectionRange(selStart, selStart + replacement.length);
+                return;
+            }
+
+            // Si no hay texto seleccionado pero el cursor está dentro de un /* ... */, lo descomenta
+            const enclosingCursor = findEnclosingBlockComment(selStart, selEnd);
+            if (enclosingCursor) {
+                const inner = val.slice(enclosingCursor.openIdx + 2, enclosingCursor.closeIdx - 2).replace(/^\s/, "").replace(/\s$/, "");
+                const updated = val.slice(0, enclosingCursor.openIdx) + inner + val.slice(enclosingCursor.closeIdx);
+                applyTextareaFormatWithUndo(textarea, updated);
+                textarea.setSelectionRange(enclosingCursor.openIdx, enclosingCursor.openIdx + inner.length);
+                return;
+            }
+
+            // Si no hay selección ni bloque activo, envolver la línea actual en /* ... */
+            const lineStart = val.lastIndexOf("\n", selStart - 1) + 1;
+            let lineEnd = val.indexOf("\n", selStart);
+            if (lineEnd === -1) lineEnd = val.length;
+            const lineContent = val.slice(lineStart, lineEnd);
+            if (lineContent.trim().length > 0) {
+                const replacement = `/* ${lineContent} */`;
+                const updated = val.slice(0, lineStart) + replacement + val.slice(lineEnd);
+                applyTextareaFormatWithUndo(textarea, updated);
+                textarea.setSelectionRange(lineStart, lineStart + replacement.length);
+            } else {
+                const replacement = "/*  */";
+                const updated = val.slice(0, selStart) + replacement + val.slice(selEnd);
+                applyTextareaFormatWithUndo(textarea, updated);
+                textarea.setSelectionRange(selStart + 3, selStart + 3);
+            }
+        };
+
         window.addEventListener("keydown", (e) => {
+            // Ctrl + Shift + C (o Cmd + Shift + C): Comentar / descomentar selección con /* texto aqui */
+            if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && (e.key.toLowerCase() === "c" || e.code === "KeyC")) {
+                if (e.target && e.target.tagName === "TEXTAREA") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.stopImmediatePropagation();
+                    const acPopup = document.getElementById("autocomplete-plus-root");
+                    if (acPopup) acPopup.style.display = "none";
+                    toggleBlockCommentOnTextarea(e.target);
+                    return;
+                }
+            }
+
             // Cmd + / (o Ctrl + /): Silenciar / activar frase o línea con comentario en cualquier textarea de prompt
             if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === "/" || e.code === "Slash")) {
                 if (e.target && e.target.tagName === "TEXTAREA") {
@@ -368,22 +460,31 @@ app.registerExtension({
                             return Array.from(bounds).sort((a, b) => a - b);
                         };
 
-                        originalTextarea.addEventListener("mousedown", () => {
+                        const onModalMousedown = () => {
                             selAnchor = null;
                             selFocus = null;
-                        });
+                        };
+                        originalTextarea.addEventListener("mousedown", onModalMousedown);
 
                         modal.addEventListener("click", (evt) => evt.stopPropagation());
+                        // IMPORTANTE: stopPropagation en fase BUBBLE (sin capture: true) en el modal
+                        // para que el evento keydown SIEMPRE baje primero hasta originalTextarea y Autocomplete-Plus
+                        // pueda recibir ArrowUp, ArrowDown, Enter, Tab y Escape.
                         modal.addEventListener("keydown", (evt) => {
                             evt.stopPropagation();
+                        });
 
+                        const onModalKeyDown = (evt) => {
                             if (evt.key === "F2") {
                                 evt.preventDefault();
+                                evt.stopPropagation();
                                 closeAndRestore();
                                 return;
                             }
 
                             if (evt.metaKey && evt.key === "Escape") {
+                                evt.preventDefault();
+                                evt.stopPropagation();
                                 // Revertir el texto al estado original y cerrar
                                 originalTextarea.value = originalText;
                                 closeAndRestore();
@@ -391,7 +492,20 @@ app.registerExtension({
                             }
 
                             if (evt.metaKey && evt.key === "Enter") {
+                                evt.preventDefault();
+                                evt.stopPropagation();
                                 closeAndRestore();
+                                return;
+                            }
+
+                            // Ctrl + Shift + C (o Cmd + Shift + C) dentro del modal Text-Editor: Comentar / Descomentar selección con /* ... */
+                            if ((evt.ctrlKey || evt.metaKey) && evt.shiftKey && !evt.altKey && (evt.key.toLowerCase() === "c" || evt.code === "KeyC")) {
+                                evt.preventDefault();
+                                evt.stopImmediatePropagation();
+                                const acPopup = document.getElementById("autocomplete-plus-root");
+                                if (acPopup) acPopup.style.display = "none";
+                                toggleBlockCommentOnTextarea(originalTextarea);
+                                updateMirror();
                                 return;
                             }
 
@@ -453,9 +567,10 @@ app.registerExtension({
                                 return;
                             }
 
-                            // Prioridad máxima a la selección de texto con flechas: ocultar popups flotantes que bloqueen ArrowUp/Down
+                            // Prioridad máxima a la selección de texto con flechas (SOLO cuando hay modificadores Shift/Meta/Alt):
+                            // ocultar popups flotantes que bloqueen la selección con Shift/Cmd + ArrowUp/Down
                             if (
-                                (evt.shiftKey || evt.metaKey || evt.altKey) &&
+                                (evt.shiftKey || evt.metaKey || evt.altKey || evt.ctrlKey) &&
                                 (evt.key === "ArrowUp" || evt.key === "ArrowDown" || evt.key === "ArrowLeft" || evt.key === "ArrowRight")
                             ) {
                                 const acPopup = document.getElementById("autocomplete-plus-root");
@@ -505,9 +620,14 @@ app.registerExtension({
                                 return;
                             } else if (evt.key === "ArrowUp" || evt.key === "ArrowDown" || evt.key === "ArrowLeft" || evt.key === "ArrowRight") {
                                 // Si usa flechas normales o con Shift/Alt, actualizar endpoints en el siguiente tick
+                                // sin interceptar el evento para que Autocomplete-Plus pueda navegar con ArrowUp/ArrowDown
                                 setTimeout(syncSelectionEndpoints, 0);
+                            } else if (evt.key === "Enter" || evt.key === "Tab") {
+                                // Si Autocomplete-Plus inserta un tag con Enter/Tab, refrescar el espejo en el siguiente tick
+                                setTimeout(updateMirror, 0);
                             }
-                        }, { capture: true });
+                        };
+                        originalTextarea.addEventListener("keydown", onModalKeyDown, { capture: true });
 
                         const title = document.createElement("h3");
                         title.innerText = "Text-Editor: " + targetNode.title;
@@ -700,6 +820,8 @@ app.registerExtension({
                         const closeAndRestore = () => {
                             originalTextarea.removeEventListener('input', updateMirror);
                             originalTextarea.removeEventListener('scroll', syncScroll);
+                            originalTextarea.removeEventListener('keydown', onModalKeyDown, { capture: true });
+                            originalTextarea.removeEventListener('mousedown', onModalMousedown);
                             
                             // Restaurar estilos y posición en el DOM
                             originalTextarea.style.cssText = oldCssText;
@@ -1347,7 +1469,7 @@ app.registerExtension({
                 if (origMouseDown) return origMouseDown.apply(this, arguments);
             };
 
-            // 2. Añadir también un botón flotante HTML en la esquina superior derecha de la caja de texto de pp13
+            // 2. Asegurar que el widget de texto de pp13 filtre comentarios al serializar para ejecución
             const ensureDomBadge = () => {
                 if (!isPPNode()) return;
                 const textWidget = node.widgets?.find(w => w.type === "customtext" || w.name === "text" || w.type === "string");
@@ -1361,53 +1483,6 @@ app.registerExtension({
                         return typeof rawVal === "string" ? stripPromptComments(rawVal) : rawVal;
                     };
                 }
-                const inputEl = textWidget?.inputEl || textWidget?.element;
-                const parentEl = inputEl?.parentElement;
-                if (!parentEl || parentEl.querySelector(".fpp-pp13-ac-btn")) return;
-
-                const badgeBtn = document.createElement("button");
-                badgeBtn.type = "button";
-                badgeBtn.className = "fpp-pp13-ac-btn";
-                badgeBtn.innerHTML = "🏷️";
-                badgeBtn.title = "Editar Snippets de Autocomplete Plus";
-                Object.assign(badgeBtn.style, {
-                    position: "absolute",
-                    top: "6px",
-                    right: "12px",
-                    zIndex: "30",
-                    width: "26px",
-                    height: "24px",
-                    borderRadius: "5px",
-                    border: "1px solid rgba(96, 165, 250, 0.45)",
-                    backgroundColor: "rgba(30, 41, 59, 0.85)",
-                    color: "#fff",
-                    fontSize: "12px",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    cursor: "pointer",
-                    opacity: "0.78",
-                    transition: "opacity 0.15s, transform 0.15s, background-color 0.15s",
-                    padding: "0"
-                });
-                badgeBtn.onmouseenter = () => {
-                    badgeBtn.style.opacity = "1";
-                    badgeBtn.style.backgroundColor = "rgba(37, 99, 235, 0.95)";
-                };
-                badgeBtn.onmouseleave = () => {
-                    badgeBtn.style.opacity = "0.78";
-                    badgeBtn.style.backgroundColor = "rgba(30, 41, 59, 0.85)";
-                };
-                badgeBtn.addEventListener("mousedown", (ev) => {
-                    ev.preventDefault();
-                    ev.stopPropagation();
-                    openAutocompleteEditorModal();
-                });
-
-                if (getComputedStyle(parentEl).position === "static") {
-                    parentEl.style.position = "relative";
-                }
-                parentEl.appendChild(badgeBtn);
             };
 
             setTimeout(ensureDomBadge, 150);

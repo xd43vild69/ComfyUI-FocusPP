@@ -16,7 +16,7 @@ def inspect_safetensors_header(lora_path):
     """Lee únicamente el encabezado JSON del .safetensors (< 0.5ms) con caché en RAM."""
     if not lora_path or not os.path.exists(lora_path):
         return {
-            "found": False,
+            "found": False, 
             "arch": "Desconocido",
             "archFamily": "",
             "rank": None,
