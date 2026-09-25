@@ -288,8 +288,109 @@ async def get_focuspp_lora_info_batch(request):
 @PromptServer.instance.routes.get("/focuspp/lora_list")
 @PromptServer.instance.routes.get("/academia/lora_list")
 async def get_focuspp_lora_list(request):
+    if hasattr(folder_paths, "filename_list_cache") and isinstance(folder_paths.filename_list_cache, dict):
+        folder_paths.filename_list_cache.pop("loras", None)
     loras = folder_paths.get_filename_list("loras")
     return web.json_response(loras)
+
+
+@PromptServer.instance.routes.post("/focuspp/rename_lora")
+async def rename_focuspp_lora(request):
+    try:
+        data = await request.json()
+        old_name = str(data.get("oldName", "")).strip()
+        new_base_raw = str(data.get("newBaseName", "")).strip()
+
+        if not old_name or old_name == "None":
+            return web.json_response({"error": "No hay ningún LoRA seleccionado para renombrar."}, status=400)
+        if not new_base_raw:
+            return web.json_response({"error": "El nuevo nombre no puede estar vacío."}, status=400)
+
+        # Impedir separadores de ruta o caracteres inválidos en el nombre base
+        if "/" in new_base_raw or "\\" in new_base_raw or ".." in new_base_raw:
+            return web.json_response({"error": "Escribe solo el nombre del LoRA (sin barras de directorio)."}, status=400)
+
+        old_full_path = resolve_lora_path(old_name)
+        if not old_full_path or not os.path.isfile(old_full_path):
+            return web.json_response({"error": f"No se encontró el archivo en disco: {old_name}"}, status=404)
+
+        # Validar contención dentro de los directorios configurados de loras
+        real_old = os.path.realpath(old_full_path)
+        lora_roots = [os.path.realpath(p) for p in folder_paths.get_folder_paths("loras") if os.path.isdir(p)]
+        if not any(real_old == r or real_old.startswith(r + os.sep) for r in lora_roots):
+            return web.json_response({"error": "Ruta de LoRA fuera de los directorios permitidos."}, status=403)
+
+        parent_dir = os.path.dirname(old_full_path)
+        old_filename = os.path.basename(old_full_path)
+        old_stem, old_ext = os.path.splitext(old_filename)
+        if not old_ext:
+            old_ext = ".safetensors"
+
+        # Quitar extensión si el usuario la escribió manualmente
+        if new_base_raw.lower().endswith(old_ext.lower()):
+            new_stem = new_base_raw[: -len(old_ext)].strip()
+        elif new_base_raw.lower().endswith(".safetensors"):
+            new_stem = new_base_raw[:-12].strip()
+        else:
+            new_stem = new_base_raw
+
+        if not new_stem:
+            return web.json_response({"error": "Nombre de archivo inválido."}, status=400)
+
+        new_filename = f"{new_stem}{old_ext}"
+        new_full_path = os.path.join(parent_dir, new_filename)
+
+        if os.path.normcase(old_full_path) == os.path.normcase(new_full_path) and old_filename == new_filename:
+            return web.json_response({
+                "renamed": True,
+                "oldName": old_name,
+                "newName": old_name,
+                "loras": folder_paths.get_filename_list("loras"),
+            })
+
+        if os.path.exists(new_full_path) and os.path.normcase(old_full_path) != os.path.normcase(new_full_path):
+            return web.json_response({"error": f"Ya existe un archivo llamado '{new_filename}' en esa carpeta."}, status=409)
+
+        os.rename(old_full_path, new_full_path)
+
+        # Renombrar archivos compañeros opcionales (.preview.png, .png, .json, .civitai.info, .txt) si existen
+        for suffix in [".preview.png", ".preview.jpg", ".png", ".jpg", ".webp", ".json", ".civitai.info", ".txt"]:
+            companion_old = os.path.join(parent_dir, f"{old_stem}{suffix}")
+            companion_new = os.path.join(parent_dir, f"{new_stem}{suffix}")
+            if os.path.isfile(companion_old) and not os.path.exists(companion_new):
+                try:
+                    os.rename(companion_old, companion_new)
+                except Exception:
+                    pass
+
+        # Calcular el nuevo nombre relativo respetando el subdirectorio original en ComfyUI
+        normalized_old = old_name.replace("\\", "/")
+        if "/" in normalized_old:
+            rel_dir = normalized_old.rsplit("/", 1)[0]
+            sep = "\\" if ("\\" in old_name and "/" not in old_name) else "/"
+            new_rel_name = f"{rel_dir}{sep}{new_filename}"
+        else:
+            new_rel_name = new_filename
+
+        # Invalidar caché de lista de archivos de ComfyUI para que aparezca de inmediato
+        if hasattr(folder_paths, "filename_list_cache") and isinstance(folder_paths.filename_list_cache, dict):
+            folder_paths.filename_list_cache.pop("loras", None)
+
+        updated_loras = folder_paths.get_filename_list("loras")
+        # Asegurar coincidencia exacta con el formato devuelto por folder_paths
+        for cand in updated_loras:
+            if cand.replace("\\", "/").lower() == new_rel_name.replace("\\", "/").lower():
+                new_rel_name = cand
+                break
+
+        return web.json_response({
+            "renamed": True,
+            "oldName": old_name,
+            "newName": new_rel_name,
+            "loras": updated_loras,
+        })
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
 
 
 class FocusPPMultiLoraNode:

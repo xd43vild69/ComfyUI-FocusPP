@@ -1197,6 +1197,200 @@ app.registerExtension({
                             _this.renderUI();
                         });
 
+                        // Botón ✏️ para renombrar el archivo del LoRA directamente en el servidor
+                        const openRenameLoraDialog = (rowIdx) => {
+                            const currentRaw = _this.loraState[rowIdx]?.name || "";
+                            if (!currentRaw || currentRaw === "None") return;
+
+                            const { dir, base } = splitLoraPath(currentRaw);
+                            const existingModal = document.getElementById("fpp-rename-lora-overlay");
+                            if (existingModal) existingModal.remove();
+
+                            const overlay = document.createElement("div");
+                            overlay.id = "fpp-rename-lora-overlay";
+                            overlay.style.cssText = `
+                                position: fixed; inset: 0; background: rgba(0, 0, 0, 0.75);
+                                z-index: 100005; display: flex; align-items: center; justify-content: center;
+                                font-family: sans-serif;
+                            `;
+
+                            const box = document.createElement("div");
+                            box.style.cssText = `
+                                background: #181a20; border: 1px solid #3b82f6; border-radius: 10px;
+                                padding: 18px 20px; width: 440px; max-width: 92vw;
+                                box-shadow: 0 12px 32px rgba(0,0,0,0.65); color: #f1f5f9;
+                                display: flex; flex-direction: column; gap: 12px;
+                            `;
+
+                            const titleEl = document.createElement("div");
+                            titleEl.style.cssText = "font-size: 15px; font-weight: 700; color: #93c5fd; display: flex; align-items: center; gap: 8px;";
+                            titleEl.innerHTML = `<span>✏️ Renombrar archivo LoRA en el servidor</span>`;
+
+                            const dirInfo = document.createElement("div");
+                            dirInfo.style.cssText = "font-size: 11.5px; color: #94a3b8; background: #0f1115; padding: 6px 8px; border-radius: 5px; border: 1px solid #262932; word-break: break-all;";
+                            dirInfo.innerHTML = dir
+                                ? `📁 Carpeta actual (se conserva): <b style="color:#7dd3fc;">${dir}</b>`
+                                : `📁 Carpeta raíz de LoRAs`;
+
+                            const inp = document.createElement("input");
+                            inp.type = "text";
+                            inp.value = base;
+                            inp.placeholder = "Nuevo nombre del LoRA...";
+                            inp.style.cssText = `
+                                width: 100%; padding: 8px 10px; font-size: 14px; font-family: monospace;
+                                background: #0f1115; color: #fff; border: 1px solid #475569;
+                                border-radius: 6px; outline: none; box-sizing: border-box;
+                            `;
+                            inp.onfocus = () => { inp.style.borderColor = "#60a5fa"; };
+
+                            const statusMsg = document.createElement("div");
+                            statusMsg.style.cssText = "font-size: 12px; color: #f87171; min-height: 16px; display: none;";
+
+                            const actions = document.createElement("div");
+                            actions.style.cssText = "display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px;";
+
+                            const btnCancel = document.createElement("button");
+                            btnCancel.type = "button";
+                            btnCancel.innerText = "Cancelar";
+                            btnCancel.style.cssText = "padding: 6px 14px; background: #334155; color: #e2e8f0; border: none; border-radius: 6px; cursor: pointer; font-size: 12.5px; font-weight: 600;";
+                            btnCancel.onclick = () => overlay.remove();
+
+                            const btnSave = document.createElement("button");
+                            btnSave.type = "button";
+                            btnSave.innerText = "💾 Renombrar";
+                            btnSave.style.cssText = "padding: 6px 16px; background: #2563eb; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 12.5px; font-weight: 600;";
+
+                            const submitRename = async () => {
+                                const newBase = inp.value.trim();
+                                if (!newBase) {
+                                    statusMsg.textContent = "⚠️ Escribe un nombre válido.";
+                                    statusMsg.style.display = "block";
+                                    return;
+                                }
+                                if (newBase === base) {
+                                    overlay.remove();
+                                    return;
+                                }
+
+                                btnSave.disabled = true;
+                                btnSave.innerText = "⏳ Renombrando...";
+                                statusMsg.style.display = "none";
+
+                                try {
+                                    const res = await fetch("/focuspp/rename_lora", {
+                                        method: "POST",
+                                        headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({ oldName: currentRaw, newBaseName: newBase })
+                                    });
+                                    if (res.status === 404) {
+                                        statusMsg.textContent = "⚠️ Reinicia ComfyUI (el servidor Python) una vez para activar el renombrado en disco.";
+                                        statusMsg.style.display = "block";
+                                        btnSave.disabled = false;
+                                        btnSave.innerText = "💾 Renombrar";
+                                        return;
+                                    }
+                                    const data = await res.json();
+                                    if (!res.ok || data.error) {
+                                        statusMsg.textContent = `❌ ${data.error || "Error al renombrar el archivo"}`;
+                                        statusMsg.style.display = "block";
+                                        btnSave.disabled = false;
+                                        btnSave.innerText = "💾 Renombrar";
+                                        return;
+                                    }
+
+                                    const updatedName = data.newName || currentRaw;
+                                    if (Array.isArray(data.loras)) {
+                                        loraList = data.loras;
+                                        dirColorMap.clear();
+                                        loraList.forEach(loraName => getDirectoryPalette(loraName));
+                                    }
+
+                                    if (loraMetaCache.has(currentRaw)) {
+                                        loraMetaCache.set(updatedName, loraMetaCache.get(currentRaw));
+                                    }
+
+                                    // Actualizar todas las filas en este nodo y cualquier otro nodo MultiLora del grafo
+                                    (_this.loraState || []).forEach(st => {
+                                        if (st && st.name === currentRaw) {
+                                            st.name = updatedName;
+                                        }
+                                    });
+                                    syncWidget();
+                                    _this.renderUI();
+
+                                    if (app.graph && Array.isArray(app.graph._nodes)) {
+                                        app.graph._nodes.forEach(n => {
+                                            if (n !== _this && Array.isArray(n.loraState)) {
+                                                let changedOther = false;
+                                                n.loraState.forEach(st => {
+                                                    if (st && st.name === currentRaw) {
+                                                        st.name = updatedName;
+                                                        changedOther = true;
+                                                    }
+                                                });
+                                                if (changedOther && typeof n.renderUI === "function") {
+                                                    n.renderUI();
+                                                }
+                                            }
+                                        });
+                                    }
+
+                                    overlay.remove();
+                                } catch (err) {
+                                    statusMsg.textContent = `❌ Error de red: ${err.message}`;
+                                    statusMsg.style.display = "block";
+                                    btnSave.disabled = false;
+                                    btnSave.innerText = "💾 Renombrar";
+                                }
+                            };
+
+                            btnSave.onclick = submitRename;
+
+                            inp.addEventListener("keydown", (ev) => {
+                                ev.stopPropagation();
+                                if (ev.key === "Enter") {
+                                    ev.preventDefault();
+                                    submitRename();
+                                } else if (ev.key === "Escape") {
+                                    ev.preventDefault();
+                                    overlay.remove();
+                                }
+                            });
+
+                            overlay.addEventListener("mousedown", (ev) => {
+                                if (ev.target === overlay) overlay.remove();
+                            });
+
+                            actions.appendChild(btnCancel);
+                            actions.appendChild(btnSave);
+
+                            box.appendChild(titleEl);
+                            box.appendChild(dirInfo);
+                            box.appendChild(inp);
+                            box.appendChild(statusMsg);
+                            box.appendChild(actions);
+                            overlay.appendChild(box);
+                            document.body.appendChild(overlay);
+
+                            setTimeout(() => {
+                                inp.focus();
+                                inp.select();
+                            }, 10);
+                        };
+
+                        const btnRename = document.createElement("button");
+                        btnRename.type = "button";
+                        btnRename.innerHTML = "✏️";
+                        btnRename.title = "Renombrar archivo del LoRA en el servidor";
+                        btnRename.style.cssText = "background: transparent; border: none; color: #777; cursor: pointer; padding: 0 2px; font-size: 11px; display: flex; align-items: center; justify-content: center; opacity: 0.75; transition: opacity 0.15s, transform 0.15s;";
+                        btnRename.onmouseover = () => { btnRename.style.opacity = "1"; btnRename.style.transform = "scale(1.12)"; };
+                        btnRename.onmouseout = () => { btnRename.style.opacity = "0.75"; btnRename.style.transform = "scale(1)"; };
+                        btnRename.addEventListener("click", (e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            openRenameLoraDialog(idx);
+                        });
+
                         // Botones para reordenar arriba/abajo
                         const orderContainer = document.createElement("div");
                         orderContainer.style.cssText = "display: flex; flex-direction: column; justify-content: center; gap: 1px; margin: 0 1px;";
@@ -1242,6 +1436,12 @@ app.registerExtension({
                                     : "";
 
                                 const menuItems = [
+                                    {
+                                        content: "✏️ Renombrar archivo en el servidor",
+                                        disabled: !item.name || item.name === "None",
+                                        callback: () => openRenameLoraDialog(idx)
+                                    },
+                                    null,
                                     {
                                         content: "⬆️ Move Up",
                                         disabled: !canMoveUp,
@@ -1296,6 +1496,7 @@ app.registerExtension({
 
                         row.appendChild(labelToggle);
                         row.appendChild(searchContainer);
+                        row.appendChild(btnRename);
                         row.appendChild(strengthContainer);
                         row.appendChild(orderContainer);
                         row.appendChild(btnDelete);
