@@ -3,12 +3,15 @@ import { app } from "../../scripts/app.js";
 app.registerExtension({
     name: "FocusPositivePrompt",
     async setup() {
-        // Asegurar que el autocompletado siempre se dibuje por encima del modal gigante
+        // Asegurar que el autocompletado y menús contextuales siempre se dibujen por encima del modal y paneles Vue
         const style = document.createElement("style");
         style.innerHTML = `
             .pysssss-autocomplete, 
             #autocomplete-plus-root {
                 z-index: 99999 !important;
+            }
+            .litecontextmenu {
+                z-index: 100005 !important;
             }
         `;
         document.head.appendChild(style);
@@ -280,7 +283,7 @@ app.registerExtension({
                 } else if (app.graph && app.graph._nodes) {
                     const ppNode = app.graph._nodes.find(n => n.title && n.title.toLowerCase().trim().startsWith("pp"));
                     const textWidget = ppNode?.widgets?.find(w => w.type === "customtext" || w.name === "text" || w.type === "string");
-                    targetTextarea = textWidget?.inputEl || textWidget?.element || null;
+                    targetTextarea = textWidget?.inputEl || textWidget?.element?.querySelector?.("textarea") || textWidget?.element || null;
                 }
                 if (targetTextarea) {
                     e.preventDefault();
@@ -299,7 +302,7 @@ app.registerExtension({
                 if (!app.graph) return;
                 
                 // Ignorar si el usuario está escribiendo texto en un input
-                if (e.target.localName === "input" || e.target.localName === "textarea") return;
+                if (e.target.localName === "input" || e.target.localName === "textarea" || e.target.isContentEditable) return;
 
                 // BLOQUEAR SIEMPRE el comportamiento por defecto (silencia el atajo nativo)
                 e.preventDefault();
@@ -394,8 +397,8 @@ app.registerExtension({
                 }
             }
 
-            // Escuchar si se presiona la tecla F2
-            if (e.key === "F2") {
+            // Escuchar si se presiona la tecla F2 (sin modificadores)
+            if ((e.key === "F2" || e.code === "F2") && !e.metaKey && !e.ctrlKey && !e.altKey) {
                 const existingOverlay = document.getElementById("focus-pp-overlay");
                 if (existingOverlay) {
                     e.preventDefault();
@@ -432,9 +435,10 @@ app.registerExtension({
 
                     // Buscar la caja de texto dentro del nodo (normalmente el widget "text" o "customtext")
                     const textWidget = targetNode.widgets?.find(w => w.type === "customtext" || w.name === "text" || w.type === "string");
+                    const domTextarea = textWidget?.inputEl || textWidget?.element?.querySelector?.("textarea") || textWidget?.element;
 
-                    if (textWidget && textWidget.inputEl) {
-                        const originalTextarea = textWidget.inputEl;
+                    if (textWidget && domTextarea) {
+                        const originalTextarea = domTextarea;
                         const oldParent = originalTextarea.parentNode;
                         const oldCssText = originalTextarea.style.cssText;
 
@@ -1632,15 +1636,28 @@ app.registerExtension({
         // --- BOTÓN PARA COLAPSAR / EXPANDIR LA BARRA DE ACCIONES SUPERIOR (DEJANDO SOLO RUN / QUEUE) ---
         const COLLAPSE_STORAGE_KEY = "fpp_actionbar_collapsed";
         let isActionbarCollapsed = localStorage.getItem(COLLAPSE_STORAGE_KEY) !== "false"; // Por defecto colapsada como pidió el usuario
+        let toggleBtnEl = null;
 
         const collapseStyle = document.createElement("style");
         collapseStyle.id = "fpp-actionbar-collapse-style";
         collapseStyle.innerHTML = `
+            body.fpp-actionbar-collapsed [data-testid="action-bar-buttons"],
+            body.fpp-actionbar-collapsed [data-testid="legacy-topbar-container"] > * > :not(#fpp-actionbar-toggle-btn),
+            body.fpp-actionbar-collapsed .comfyui-menu > :not(#fpp-actionbar-toggle-btn),
+            body.fpp-actionbar-collapsed .actionbar-container > button:not(#fpp-actionbar-toggle-btn),
+            body.fpp-actionbar-collapsed .actionbar-container > :has(.icon-\\[comfy--extensions-blocks\\]),
+            body.fpp-actionbar-collapsed .actionbar-container > :has(.icon-\\[comfy--send\\]),
             body.fpp-actionbar-collapsed .pixaroma-align-group,
             body.fpp-actionbar-collapsed .pixwb-group-btn,
             body.fpp-actionbar-collapsed .pixhb-group-btn,
-            body.fpp-actionbar-collapsed .fpp-collapsible-toolbar-item {
+            body.fpp-actionbar-collapsed .fpp-collapsible-toolbar-item,
+            .actionbar-container.fpp-actionbar-collapsed .fpp-collapsible-toolbar-item {
                 display: none !important;
+            }
+            body.fpp-actionbar-collapsed [data-testid="legacy-topbar-container"] > * {
+                margin-left: 0 !important;
+                margin-right: 0 !important;
+                gap: 0 !important;
             }
             .fpp-actionbar-toggle-btn {
                 display: inline-flex;
@@ -1658,6 +1675,7 @@ app.registerExtension({
                 margin-right: 2px;
                 transition: all 0.15s ease;
                 user-select: none;
+                flex-shrink: 0;
             }
             .fpp-actionbar-toggle-btn:hover {
                 background: rgba(59, 130, 246, 0.25);
@@ -1669,21 +1687,18 @@ app.registerExtension({
 
         const syncActionbarCollapseState = () => {
             document.body.classList.toggle("fpp-actionbar-collapsed", isActionbarCollapsed);
-            const settingsGroupEl = app.menu?.settingsGroup?.element;
-            if (!settingsGroupEl) return;
 
-            // Marcar settingsGroup ("Show Image Feed") y todos los botones de custom nodes a su izquierda
-            settingsGroupEl.classList.add("fpp-collapsible-toolbar-item");
-            let prev = settingsGroupEl.previousElementSibling;
-            while (prev) {
-                if (!prev.classList.contains("fpp-actionbar-toggle-group")) {
-                    prev.classList.add("fpp-collapsible-toolbar-item");
-                }
-                prev = prev.previousElementSibling;
-            }
+            const menuEl =
+                app.menu?.element ||
+                document.querySelector('[data-testid="legacy-topbar-container"] > div') ||
+                document.querySelector('.comfyui-menu');
 
-            // Crear o actualizar el botón de colapsar/expandir justo después de settingsGroup (al lado de ⋮⋮ Run)
-            let toggleBtn = document.getElementById("fpp-actionbar-toggle-btn");
+            // Crear o recuperar el botón de colapsar/expandir (incluso si app.menu.element aún no se ha montado en document)
+            let toggleBtn =
+                toggleBtnEl ||
+                document.getElementById("fpp-actionbar-toggle-btn") ||
+                menuEl?.querySelector?.("#fpp-actionbar-toggle-btn");
+
             if (!toggleBtn) {
                 toggleBtn = document.createElement("button");
                 toggleBtn.id = "fpp-actionbar-toggle-btn";
@@ -1696,13 +1711,55 @@ app.registerExtension({
                     localStorage.setItem(COLLAPSE_STORAGE_KEY, String(isActionbarCollapsed));
                     syncActionbarCollapseState();
                 });
-                settingsGroupEl.after(toggleBtn);
             }
+            toggleBtnEl = toggleBtn;
+
+            // Limpiar posibles duplicados si se crearon antes del montaje
+            document.querySelectorAll("#fpp-actionbar-toggle-btn").forEach(btn => {
+                if (btn !== toggleBtn) btn.remove();
+            });
 
             toggleBtn.innerHTML = isActionbarCollapsed ? "◀" : "▶";
             toggleBtn.title = isActionbarCollapsed
                 ? "Mostrar barra de herramientas (Manager, Pixaroma, Feed...)"
                 : "Colapsar barra de herramientas (dejar solo Run)";
+
+            // 1. Insertar dentro de app.menu.element (legacy-topbar-container) como último hijo, justo a la izquierda de ⋮⋮ Run.
+            // Al ser un contenedor DOM plano y no un template Vue, Vue no sobreescribe sus hijos ni clases al hacer hover.
+            if (menuEl) {
+                Array.from(menuEl.children).forEach(child => {
+                    if (child === toggleBtn) return;
+                    child.classList.add("fpp-collapsible-toolbar-item");
+                });
+                if (toggleBtn.parentElement !== menuEl || menuEl.lastElementChild !== toggleBtn) {
+                    menuEl.appendChild(toggleBtn);
+                }
+                const legacyContainer = menuEl.closest?.('[data-testid="legacy-topbar-container"]');
+                if (legacyContainer) {
+                    legacyContainer.classList.remove("fpp-collapsible-toolbar-item");
+                }
+                return;
+            }
+
+            // 2. Fallback directo en .actionbar-container si no existe app.menu.element
+            const actionbarContainer =
+                document.querySelector('[data-testid="action-bar-card"] .actionbar-container') ||
+                document.querySelector('.actionbar-container');
+
+            if (actionbarContainer) {
+                const runBarInner =
+                    actionbarContainer.querySelector('.actionbar') ||
+                    actionbarContainer.querySelector('[data-testid="queue-overlay-toggle"]');
+                const runBarWrapper = runBarInner
+                    ? Array.from(actionbarContainer.children).find(child => child === runBarInner || child.contains(runBarInner))
+                    : null;
+
+                if (runBarWrapper) {
+                    if (toggleBtn.parentElement !== actionbarContainer || toggleBtn.nextElementSibling !== runBarWrapper) {
+                        actionbarContainer.insertBefore(toggleBtn, runBarWrapper);
+                    }
+                }
+            }
         };
 
         // Ejecutar y observar inserciones tardías de custom nodes (ej. Pixaroma / Manager / rgthree)

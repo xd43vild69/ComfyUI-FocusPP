@@ -25,7 +25,7 @@ app.registerExtension({
 
         // Atajo global F4: Buscar, centrar y seleccionar el nodo llamado "loras13"
         window.addEventListener("keydown", (e) => {
-            if (e.key === "F4" || e.code === "F4") {
+            if ((e.key === "F4" || e.code === "F4") && !e.metaKey && !e.ctrlKey && !e.altKey) {
                 if (!app.graph || !app.graph._nodes) return;
 
                 const targetNode = app.graph._nodes.find(n => (n.title || "").trim().toLowerCase() === "loras13") ||
@@ -1299,20 +1299,30 @@ app.registerExtension({
                                     }
 
                                     const updatedName = data.newName || currentRaw;
+                                    const backedUpMap = (data.backedUp && typeof data.backedUp === "object") ? data.backedUp : {};
+
                                     if (Array.isArray(data.loras)) {
                                         loraList = data.loras;
                                         dirColorMap.clear();
                                         loraList.forEach(loraName => getDirectoryPalette(loraName));
                                     }
 
+                                    for (const [oldConflict, newBk] of Object.entries(backedUpMap)) {
+                                        if (loraMetaCache.has(oldConflict)) {
+                                            loraMetaCache.set(newBk, loraMetaCache.get(oldConflict));
+                                        }
+                                    }
                                     if (loraMetaCache.has(currentRaw)) {
                                         loraMetaCache.set(updatedName, loraMetaCache.get(currentRaw));
                                     }
 
                                     // Actualizar todas las filas en este nodo y cualquier otro nodo MultiLora del grafo
                                     (_this.loraState || []).forEach(st => {
-                                        if (st && st.name === currentRaw) {
+                                        if (!st) return;
+                                        if (st.name === currentRaw) {
                                             st.name = updatedName;
+                                        } else if (backedUpMap[st.name]) {
+                                            st.name = backedUpMap[st.name];
                                         }
                                     });
                                     syncWidget();
@@ -1323,8 +1333,12 @@ app.registerExtension({
                                             if (n !== _this && Array.isArray(n.loraState)) {
                                                 let changedOther = false;
                                                 n.loraState.forEach(st => {
-                                                    if (st && st.name === currentRaw) {
+                                                    if (!st) return;
+                                                    if (st.name === currentRaw) {
                                                         st.name = updatedName;
+                                                        changedOther = true;
+                                                    } else if (backedUpMap[st.name]) {
+                                                        st.name = backedUpMap[st.name];
                                                         changedOther = true;
                                                     }
                                                 });

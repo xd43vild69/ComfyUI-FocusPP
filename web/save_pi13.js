@@ -115,7 +115,7 @@ app.registerExtension({
     setup() {
         window.addEventListener("keydown", async (e) => {
             // Ignorar si el usuario está escribiendo texto en un input/textarea
-            if (e.target.localName === "input" || e.target.localName === "textarea") return;
+            if (e.target.localName === "input" || e.target.localName === "textarea" || e.target.isContentEditable) return;
 
             // Tecla F1 (sin modificadores)
             if ((e.key === "F1" || e.code === "F1") && !e.metaKey && !e.ctrlKey && !e.altKey) {

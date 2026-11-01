@@ -345,23 +345,87 @@ async def rename_focuspp_lora(request):
                 "renamed": True,
                 "oldName": old_name,
                 "newName": old_name,
+                "backedUp": {},
                 "loras": folder_paths.get_filename_list("loras"),
             })
 
-        if os.path.exists(new_full_path) and os.path.normcase(old_full_path) != os.path.normcase(new_full_path):
-            return web.json_response({"error": f"Ya existe un archivo llamado '{new_filename}' en esa carpeta."}, status=409)
+        companion_suffixes = [".preview.png", ".preview.jpg", ".png", ".jpg", ".webp", ".json", ".civitai.info", ".txt"]
 
-        os.rename(old_full_path, new_full_path)
+        def _rename_with_companions(dir_p, src_s, dst_s, ext_s):
+            src_f = os.path.join(dir_p, f"{src_s}{ext_s}")
+            dst_f = os.path.join(dir_p, f"{dst_s}{ext_s}")
+            os.rename(src_f, dst_f)
+            for sfx in companion_suffixes:
+                c_old = os.path.join(dir_p, f"{src_s}{sfx}")
+                c_new = os.path.join(dir_p, f"{dst_s}{sfx}")
+                if os.path.isfile(c_old) and not os.path.exists(c_new):
+                    try:
+                        os.rename(c_old, c_new)
+                    except Exception:
+                        pass
 
-        # Renombrar archivos compañeros opcionales (.preview.png, .png, .json, .civitai.info, .txt) si existen
-        for suffix in [".preview.png", ".preview.jpg", ".png", ".jpg", ".webp", ".json", ".civitai.info", ".txt"]:
-            companion_old = os.path.join(parent_dir, f"{old_stem}{suffix}")
-            companion_new = os.path.join(parent_dir, f"{new_stem}{suffix}")
-            if os.path.isfile(companion_old) and not os.path.exists(companion_new):
-                try:
-                    os.rename(companion_old, companion_new)
-                except Exception:
-                    pass
+        # Recopilar todos los stems existentes en el catálogo de LoRAs para que el nombre -bk sea único globalmente
+        all_current_loras = folder_paths.get_filename_list("loras")
+        existing_stems_lower = set()
+        for l_rel in all_current_loras:
+            b_name = os.path.basename(l_rel.replace("\\", "/"))
+            s_name, _ = os.path.splitext(b_name)
+            existing_stems_lower.add(s_name.lower())
+
+        def _next_available_bk_stem(dir_p, base_s, ext_s):
+            candidate_stem = f"{base_s}-bk"
+            if not os.path.exists(os.path.join(dir_p, f"{candidate_stem}{ext_s}")) and candidate_stem.lower() not in existing_stems_lower:
+                existing_stems_lower.add(candidate_stem.lower())
+                return candidate_stem
+            counter = 2
+            while True:
+                candidate_stem = f"{base_s}-bk-{counter}"
+                if not os.path.exists(os.path.join(dir_p, f"{candidate_stem}{ext_s}")) and candidate_stem.lower() not in existing_stems_lower:
+                    existing_stems_lower.add(candidate_stem.lower())
+                    return candidate_stem
+                counter += 1
+
+        # Buscar cualquier otro LoRA existente con el mismo nombre (tanto en la misma carpeta como en cualquier subcarpeta de loras)
+        conflicts = []
+        seen_real_paths = set()
+
+        if os.path.isfile(new_full_path) and os.path.realpath(new_full_path) != real_old:
+            real_np = os.path.realpath(new_full_path)
+            seen_real_paths.add(real_np)
+            conflicts.append((new_full_path, None))
+
+        for l_rel in all_current_loras:
+            b_name = os.path.basename(l_rel.replace("\\", "/"))
+            s_name, _ = os.path.splitext(b_name)
+            if s_name.lower() == new_stem.lower():
+                c_full = folder_paths.get_full_path("loras", l_rel)
+                if c_full and os.path.isfile(c_full):
+                    real_cf = os.path.realpath(c_full)
+                    if real_cf != real_old and real_cf not in seen_real_paths:
+                        seen_real_paths.add(real_cf)
+                        conflicts.append((c_full, l_rel))
+
+        backed_up = {}
+        for conflict_full_path, conflict_rel in conflicts:
+            c_dir = os.path.dirname(conflict_full_path)
+            c_file = os.path.basename(conflict_full_path)
+            c_stem, c_ext = os.path.splitext(c_file)
+            if not c_ext:
+                c_ext = old_ext
+            bk_stem = _next_available_bk_stem(c_dir, c_stem, c_ext)
+            _rename_with_companions(c_dir, c_stem, bk_stem, c_ext)
+            if conflict_rel:
+                norm_c = conflict_rel.replace("\\", "/")
+                if "/" in norm_c:
+                    c_rel_dir = norm_c.rsplit("/", 1)[0]
+                    c_sep = "\\" if ("\\" in conflict_rel and "/" not in conflict_rel) else "/"
+                    bk_rel = f"{c_rel_dir}{c_sep}{bk_stem}{c_ext}"
+                else:
+                    bk_rel = f"{bk_stem}{c_ext}"
+                backed_up[conflict_rel] = bk_rel
+
+        # Ahora renombrar el LoRA seleccionado al nuevo nombre deseado
+        _rename_with_companions(parent_dir, old_stem, new_stem, old_ext)
 
         # Calcular el nuevo nombre relativo respetando el subdirectorio original en ComfyUI
         normalized_old = old_name.replace("\\", "/")
@@ -387,6 +451,7 @@ async def rename_focuspp_lora(request):
             "renamed": True,
             "oldName": old_name,
             "newName": new_rel_name,
+            "backedUp": backed_up,
             "loras": updated_loras,
         })
     except Exception as e:

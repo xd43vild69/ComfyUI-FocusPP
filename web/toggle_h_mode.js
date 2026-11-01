@@ -8,7 +8,15 @@ app.registerExtension({
 
         window.addEventListener("keydown", (e) => {
             if (isDispatching) return;
-            if (e.target.localName === "input" || e.target.localName === "textarea") return;
+            if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
+            if (
+                e.target.localName === "input" ||
+                e.target.localName === "textarea" ||
+                e.target.isContentEditable ||
+                e.target.closest?.(".p-dialog, .p-overlaypanel, [contenteditable='true'], #focus-pp-overlay, #fpp-ac-editor-overlay, #fpp-rename-lora-overlay")
+            ) {
+                return;
+            }
 
             if (e.key.toLowerCase() === 'h') {
                 e.preventDefault();

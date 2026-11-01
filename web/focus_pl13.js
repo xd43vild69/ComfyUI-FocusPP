@@ -4,11 +4,12 @@ app.registerExtension({
     name: "ComfyUI-FocusPP.FocusPL13",
     setup() {
         window.addEventListener("keydown", (e) => {
-            // Ignorar si el usuario está escribiendo en un campo de texto
-            if (e.target.localName === "input" || e.target.localName === "textarea") return;
+            // Ignorar si el usuario está escribiendo en un campo de texto o usa modificadores
+            if (e.metaKey || e.ctrlKey || e.altKey) return;
+            if (e.target.localName === "input" || e.target.localName === "textarea" || e.target.isContentEditable) return;
 
             // F3 key
-            if (e.key === 'F3') {
+            if (e.key === 'F3' || e.code === 'F3') {
                 e.preventDefault();
                 e.stopPropagation();
                 
