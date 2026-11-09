@@ -338,53 +338,25 @@ app.registerExtension({
                 return;
             }
 
-            // Rastrear estado físico de Cmd/Ctrl para macOS (donde Cocoa convierte Cmd+Esc en cancelOperation: con metaKey=false)
-            if (e.key === "Meta" || e.key === "Control" || e.metaKey || e.ctrlKey) {
-                window._fppMetaHeld = true;
-                window._fppLastMetaTime = Date.now();
-            }
+            // Cmd + Option (Alt) + Enter (o Ctrl + Alt + Enter): Ejecutar Clean Run (Unload Models -> Free Cache -> Run)
+            if ((e.metaKey || e.ctrlKey) && e.altKey && !e.shiftKey && (e.key === "Enter" || e.code === "Enter")) {
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
 
-            // Cmd + Esc, Ctrl + Esc, o Esc en cualquier parte de la ventana: cerrar inmediatamente el modal activo
-            if (e.key === "Escape" || e.code === "Escape" || e.keyCode === 27) {
-                const isCmdOrCtrlEsc =
-                    e.metaKey ||
-                    e.ctrlKey ||
-                    window._fppMetaHeld ||
-                    (window._fppLastMetaTime && Date.now() - window._fppLastMetaTime < 1500);
-
-                const acPopup = document.getElementById("autocomplete-plus-root");
-                const isAcVisible = acPopup && acPopup.style.display !== "none" && acPopup.offsetParent !== null;
-
-                // Si es Cmd+Esc cerramos el modal siempre; si es Esc solo y el autocomplete NO está visible, también cerramos el modal
-                if (isCmdOrCtrlEsc || !isAcVisible) {
+                const existingOverlay = document.getElementById("focus-pp-overlay");
+                if (existingOverlay && typeof existingOverlay._closeAndRestore === "function") {
+                    const acPopup = document.getElementById("autocomplete-plus-root");
                     if (acPopup) acPopup.style.display = "none";
-
-                    const acEditorOverlay = document.getElementById("fpp-ac-editor-overlay");
-                    if (acEditorOverlay) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        e.stopImmediatePropagation();
-                        acEditorOverlay.remove();
-                        return;
-                    }
-
-                    const existingOverlay = document.getElementById("focus-pp-overlay");
-                    if (existingOverlay) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        e.stopImmediatePropagation();
-                        if (typeof existingOverlay._closeAndRestore === "function") {
-                            existingOverlay._closeAndRestore();
-                        } else {
-                            existingOverlay.remove();
-                        }
-                        return;
-                    }
+                    existingOverlay._closeAndRestore();
                 }
+
+                runCleanAndQueue();
+                return;
             }
 
             // Cmd + Enter (o Ctrl + Enter) en cualquier parte del modal: guardar y cerrar el modal
-            if ((e.metaKey || e.ctrlKey) && (e.key === "Enter" || e.code === "Enter")) {
+            if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && (e.key === "Enter" || e.code === "Enter")) {
                 const existingOverlay = document.getElementById("focus-pp-overlay");
                 if (existingOverlay && typeof existingOverlay._closeAndRestore === "function") {
                     e.preventDefault();
@@ -558,16 +530,7 @@ app.registerExtension({
                                 return;
                             }
 
-                            if (evt.metaKey && evt.key === "Escape") {
-                                evt.preventDefault();
-                                evt.stopPropagation();
-                                // Revertir el texto al estado original y cerrar
-                                originalTextarea.value = originalText;
-                                closeAndRestore();
-                                return;
-                            }
-
-                            if (evt.metaKey && evt.key === "Enter") {
+                            if (evt.metaKey && !evt.altKey && !evt.shiftKey && evt.key === "Enter") {
                                 evt.preventDefault();
                                 evt.stopPropagation();
                                 closeAndRestore();
@@ -1020,49 +983,6 @@ app.registerExtension({
             }
         }, { capture: true }); // Usamos capture: true para que nuestro atajo se ejecute ANTES que los de ComfyUI
 
-        // Fallback en keyup para macOS: en Mac, Cocoa convierte Cmd+Esc en cancelOperation: (metaKey=false)
-        // o emite el keyup de Escape justo al soltar Cmd.
-        window.addEventListener("keyup", (e) => {
-            if (e.key === "Meta" || e.key === "Control") {
-                window._fppMetaHeld = false;
-                window._fppLastMetaTime = Date.now();
-                return;
-            }
-            if (e.key === "Escape" || e.code === "Escape" || e.keyCode === 27) {
-                const isCmdOrCtrlEsc =
-                    e.metaKey ||
-                    e.ctrlKey ||
-                    window._fppMetaHeld ||
-                    (window._fppLastMetaTime && Date.now() - window._fppLastMetaTime < 1500);
-
-                const acPopup = document.getElementById("autocomplete-plus-root");
-                const isAcVisible = acPopup && acPopup.style.display !== "none" && acPopup.offsetParent !== null;
-
-                if (isCmdOrCtrlEsc || !isAcVisible) {
-                    if (acPopup) acPopup.style.display = "none";
-
-                    const acEditorOverlay = document.getElementById("fpp-ac-editor-overlay");
-                    if (acEditorOverlay) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        acEditorOverlay.remove();
-                        return;
-                    }
-
-                    const existingOverlay = document.getElementById("focus-pp-overlay");
-                    if (existingOverlay) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        if (typeof existingOverlay._closeAndRestore === "function") {
-                            existingOverlay._closeAndRestore();
-                        } else {
-                            existingOverlay.remove();
-                        }
-                    }
-                }
-            }
-        }, { capture: true });
-
         // --- RECARGA EN CALIENTE DE COMFYUI-AUTOCOMPLETE-PLUS ---
         const reloadAutocompletePlusInMemory = async () => {
             try {
@@ -1281,7 +1201,7 @@ app.registerExtension({
             footerBtns.style.cssText = "display: flex; gap: 10px;";
 
             const btnCancel = document.createElement("button");
-            btnCancel.innerText = "Cerrar (Esc)";
+            btnCancel.innerText = "Cerrar";
             Object.assign(btnCancel.style, {
                 padding: "8px 18px",
                 borderRadius: "6px",
@@ -1507,10 +1427,7 @@ app.registerExtension({
 
             overlay.addEventListener("keydown", (e) => {
                 e.stopPropagation();
-                if (e.key === "Escape") {
-                    e.preventDefault();
-                    closeModal();
-                } else if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
                     e.preventDefault();
                     saveChanges();
                 }
@@ -1633,18 +1550,20 @@ app.registerExtension({
             }
         }, 1000);
 
-        // --- BOTÓN PARA COLAPSAR / EXPANDIR LA BARRA DE ACCIONES SUPERIOR (DEJANDO SOLO RUN / QUEUE) ---
+        // --- BOTÓN PARA COLAPSAR / EXPANDIR LA BARRA DE ACCIONES SUPERIOR Y BOTÓN CLEAN RUN ---
         const COLLAPSE_STORAGE_KEY = "fpp_actionbar_collapsed";
         let isActionbarCollapsed = localStorage.getItem(COLLAPSE_STORAGE_KEY) !== "false"; // Por defecto colapsada como pidió el usuario
         let toggleBtnEl = null;
+        let cleanRunBtnEl = null;
+        let isCleanRunBusy = false;
 
         const collapseStyle = document.createElement("style");
         collapseStyle.id = "fpp-actionbar-collapse-style";
         collapseStyle.innerHTML = `
             body.fpp-actionbar-collapsed [data-testid="action-bar-buttons"],
-            body.fpp-actionbar-collapsed [data-testid="legacy-topbar-container"] > * > :not(#fpp-actionbar-toggle-btn),
-            body.fpp-actionbar-collapsed .comfyui-menu > :not(#fpp-actionbar-toggle-btn),
-            body.fpp-actionbar-collapsed .actionbar-container > button:not(#fpp-actionbar-toggle-btn),
+            body.fpp-actionbar-collapsed [data-testid="legacy-topbar-container"] > * > :not(#fpp-actionbar-toggle-btn):not(#fpp-clean-run-btn),
+            body.fpp-actionbar-collapsed .comfyui-menu > :not(#fpp-actionbar-toggle-btn):not(#fpp-clean-run-btn),
+            body.fpp-actionbar-collapsed .actionbar-container > button:not(#fpp-actionbar-toggle-btn):not(#fpp-clean-run-btn),
             body.fpp-actionbar-collapsed .actionbar-container > :has(.icon-\\[comfy--extensions-blocks\\]),
             body.fpp-actionbar-collapsed .actionbar-container > :has(.icon-\\[comfy--send\\]),
             body.fpp-actionbar-collapsed .pixaroma-align-group,
@@ -1672,7 +1591,7 @@ app.registerExtension({
                 cursor: pointer;
                 font-size: 11px;
                 padding: 0;
-                margin-right: 2px;
+                margin-right: 4px;
                 transition: all 0.15s ease;
                 user-select: none;
                 flex-shrink: 0;
@@ -1682,8 +1601,79 @@ app.registerExtension({
                 border-color: rgba(96, 165, 250, 0.5);
                 color: #ffffff;
             }
+            .fpp-clean-run-btn {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                gap: 4px;
+                height: 28px;
+                padding: 0 9px;
+                margin-right: 4px;
+                border-radius: 6px;
+                border: 1px solid rgba(16, 185, 129, 0.4);
+                background: rgba(16, 185, 129, 0.18);
+                color: #6ee7b7;
+                cursor: pointer;
+                font-size: 11.5px;
+                font-weight: 600;
+                transition: all 0.15s ease;
+                user-select: none;
+                flex-shrink: 0;
+                white-space: nowrap;
+            }
+            .fpp-clean-run-btn:hover:not(:disabled) {
+                background: rgba(16, 185, 129, 0.32);
+                border-color: rgba(52, 211, 153, 0.75);
+                color: #ffffff;
+            }
+            .fpp-clean-run-btn:disabled {
+                opacity: 0.7;
+                cursor: wait;
+            }
         `;
         document.head.appendChild(collapseStyle);
+
+        const runCleanAndQueue = async (btn) => {
+            if (isCleanRunBusy) return;
+            isCleanRunBusy = true;
+            const targetBtn = btn || cleanRunBtnEl || document.getElementById("fpp-clean-run-btn");
+            const origHtml = targetBtn ? targetBtn.innerHTML : "🧹 Run";
+            if (targetBtn) targetBtn.disabled = true;
+
+            try {
+                // Paso 1: Unload Models
+                if (targetBtn) targetBtn.innerHTML = "⏳ Unload...";
+                await fetch("/free", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ unload_models: true })
+                });
+                await new Promise(r => setTimeout(r, 200));
+
+                // Paso 2: Free model & node cache
+                if (targetBtn) targetBtn.innerHTML = "⏳ Free Cache...";
+                await fetch("/free", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ unload_models: true, free_memory: true })
+                });
+                await new Promise(r => setTimeout(r, 250));
+
+                // Paso 3: Run (Queue Prompt)
+                if (targetBtn) targetBtn.innerHTML = "🚀 Run!";
+                await app.queuePrompt(0);
+            } catch (err) {
+                console.error("[FocusPP] Error en Clean Run:", err);
+            } finally {
+                setTimeout(() => {
+                    if (targetBtn) {
+                        targetBtn.innerHTML = origHtml;
+                        targetBtn.disabled = false;
+                    }
+                    isCleanRunBusy = false;
+                }, 350);
+            }
+        };
 
         const syncActionbarCollapseState = () => {
             document.body.classList.toggle("fpp-actionbar-collapsed", isActionbarCollapsed);
@@ -1714,9 +1704,33 @@ app.registerExtension({
             }
             toggleBtnEl = toggleBtn;
 
+            // Crear o recuperar el botón Clean Run (Unload Models -> Free Cache -> Run)
+            let cleanRunBtn =
+                cleanRunBtnEl ||
+                document.getElementById("fpp-clean-run-btn") ||
+                menuEl?.querySelector?.("#fpp-clean-run-btn");
+
+            if (!cleanRunBtn) {
+                cleanRunBtn = document.createElement("button");
+                cleanRunBtn.id = "fpp-clean-run-btn";
+                cleanRunBtn.type = "button";
+                cleanRunBtn.className = "fpp-clean-run-btn";
+                cleanRunBtn.innerHTML = "🧹 Run";
+                cleanRunBtn.title = "Clean Run (Cmd+Option+Enter): 1) Unload Models → 2) Free Node & Cache → 3) Run";
+                cleanRunBtn.addEventListener("click", (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    runCleanAndQueue(cleanRunBtn);
+                });
+            }
+            cleanRunBtnEl = cleanRunBtn;
+
             // Limpiar posibles duplicados si se crearon antes del montaje
             document.querySelectorAll("#fpp-actionbar-toggle-btn").forEach(btn => {
                 if (btn !== toggleBtn) btn.remove();
+            });
+            document.querySelectorAll("#fpp-clean-run-btn").forEach(btn => {
+                if (btn !== cleanRunBtn) btn.remove();
             });
 
             toggleBtn.innerHTML = isActionbarCollapsed ? "◀" : "▶";
@@ -1724,15 +1738,21 @@ app.registerExtension({
                 ? "Mostrar barra de herramientas (Manager, Pixaroma, Feed...)"
                 : "Colapsar barra de herramientas (dejar solo Run)";
 
-            // 1. Insertar dentro de app.menu.element (legacy-topbar-container) como último hijo, justo a la izquierda de ⋮⋮ Run.
+            // 1. Insertar dentro de app.menu.element (legacy-topbar-container) como últimos hijos, justo a la izquierda de ⋮⋮ Run.
             // Al ser un contenedor DOM plano y no un template Vue, Vue no sobreescribe sus hijos ni clases al hacer hover.
             if (menuEl) {
                 Array.from(menuEl.children).forEach(child => {
-                    if (child === toggleBtn) return;
+                    if (child === toggleBtn || child === cleanRunBtn) return;
                     child.classList.add("fpp-collapsible-toolbar-item");
                 });
-                if (toggleBtn.parentElement !== menuEl || menuEl.lastElementChild !== toggleBtn) {
+                if (toggleBtn.parentElement !== menuEl) {
                     menuEl.appendChild(toggleBtn);
+                }
+                if (cleanRunBtn.parentElement !== menuEl || menuEl.lastElementChild !== cleanRunBtn) {
+                    menuEl.appendChild(cleanRunBtn);
+                }
+                if (toggleBtn.nextElementSibling !== cleanRunBtn) {
+                    menuEl.insertBefore(toggleBtn, cleanRunBtn);
                 }
                 const legacyContainer = menuEl.closest?.('[data-testid="legacy-topbar-container"]');
                 if (legacyContainer) {
@@ -1755,8 +1775,11 @@ app.registerExtension({
                     : null;
 
                 if (runBarWrapper) {
-                    if (toggleBtn.parentElement !== actionbarContainer || toggleBtn.nextElementSibling !== runBarWrapper) {
-                        actionbarContainer.insertBefore(toggleBtn, runBarWrapper);
+                    if (cleanRunBtn.parentElement !== actionbarContainer || cleanRunBtn.nextElementSibling !== runBarWrapper) {
+                        actionbarContainer.insertBefore(cleanRunBtn, runBarWrapper);
+                    }
+                    if (toggleBtn.parentElement !== actionbarContainer || toggleBtn.nextElementSibling !== cleanRunBtn) {
+                        actionbarContainer.insertBefore(toggleBtn, cleanRunBtn);
                     }
                 }
             }
